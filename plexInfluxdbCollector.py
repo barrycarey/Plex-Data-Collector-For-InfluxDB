@@ -138,13 +138,39 @@ class plexInfluxdbCollector():
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
+
+                # Figure Out Media Type
+                if stream.attrib['type'] == 'movie':
+                    media_type = 'Movie'
+                elif stream.attrib['type'] == 'episode':
+                    media_type = 'TV Show'
+                elif stream.attrib['type'] == 'track':
+                    media_type = 'Music'
+                else:
+                    media_type = 'Unknown'
+
+                # Build the title. TV and Music Have a root title plus episode/track name.  Movies don't
+                full_title = ""
+                if 'grandparentTitle' in stream.attrib:
+                    full_title = stream.attrib['grandparentTitle'] + ' - ' + stream.attrib['title']
+                else:
+                    full_title = stream.attrib['title']
+
+                resolution = 'N/A'
+                if media_type != 'Music':
+                    resolution = stream.find('Media').attrib['videoResolution'] + 'p'
+                else:
+                    resolution = stream.find('Media').attrib['bitrate'] + 'Kbps'
+
                 playing_points = [
                     {
                         'measurement': 'now_playing',
                         'fields': {
-                            'stream_title': stream.attrib['grandparentTitle'] if 'grandparentTitle' in stream.attrib else 'Unknown',
+                            'stream_title': full_title,
                             'player': stream.find('Player').attrib['title'],
-                            'user': stream.find('User').attrib['title']
+                            'user': stream.find('User').attrib['title'],
+                            'resolution': resolution,
+                            'media_type': media_type
                         },
                         'tags': {
                             'host': host,
@@ -203,6 +229,7 @@ class plexInfluxdbCollector():
 
     def _process_library_data(self, lib_data):
         """
+        Breakdown the provided library data and format for InfluxDB
         """
         for host, data in lib_data.items():
             for lib in data:
@@ -221,6 +248,11 @@ class plexInfluxdbCollector():
                 self.write_influx_data(lib_points)
 
     def write_influx_data(self, json_data):
+        """
+        Writes the provided JSON to the database
+        :param json_data:
+        :return:
+        """
         if self.output:
             print(json_data)
         try:
