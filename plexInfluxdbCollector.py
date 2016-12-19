@@ -9,6 +9,7 @@ from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 import time
 from urllib.error import HTTPError
 import configparser
+from requests.exceptions import ConnectionError
 
 class plexInfluxdbCollector():
 
@@ -257,11 +258,15 @@ class plexInfluxdbCollector():
             print(json_data)
         try:
             self.influx_client.write_points(json_data)
-        except InfluxDBClientError as e:
-            if e.code == 404:
+        except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
+            if hasattr(e, 'code') and e.code == 404:
                 print('Database {} Does Not Exist.  Attempting To Create')
                 # TODO Grab exception here
                 self.influx_client.create_database(self.config.influx_database)
+                self.influx_client.write_points(json_data)
+                return
+            print('ERROR: Failed To Write To InfluxDB')
+            print(e)
 
 
     def run(self):
