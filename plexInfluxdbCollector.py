@@ -140,24 +140,26 @@ class plexInfluxdbCollector():
 
             for stream in streams:
 
-                # Figure Out Media Type
+                # Figure Out Media Type and Get Session ID
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
+                    session_id = stream.find('TranscodeSession').attrib['key']
                 elif stream.attrib['type'] == 'episode':
                     media_type = 'TV Show'
+                    session_id = stream.find('Session').attrib['id']
                 elif stream.attrib['type'] == 'track':
                     media_type = 'Music'
+                    session_id = stream.attrib['sessionKey']
                 else:
                     media_type = 'Unknown'
+                    session_id = 'N/A'
 
                 # Build the title. TV and Music Have a root title plus episode/track name.  Movies don't
-                full_title = ""
                 if 'grandparentTitle' in stream.attrib:
                     full_title = stream.attrib['grandparentTitle'] + ' - ' + stream.attrib['title']
                 else:
                     full_title = stream.attrib['title']
 
-                resolution = 'N/A'
                 if media_type != 'Music':
                     resolution = stream.find('Media').attrib['videoResolution'] + 'p'
                 else:
@@ -175,7 +177,8 @@ class plexInfluxdbCollector():
                         },
                         'tags': {
                             'host': host,
-                            'player_address': stream.find('Player').attrib['address']
+                            'player_address': stream.find('Player').attrib['address'],
+                            'session_id': session_id
                         }
                     }
                 ]
