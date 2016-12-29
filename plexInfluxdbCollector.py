@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 import configparser
 from requests.exceptions import ConnectionError
 
@@ -146,7 +146,8 @@ class plexInfluxdbCollector():
                     session_id = stream.find('TranscodeSession').attrib['key']
                 elif stream.attrib['type'] == 'episode':
                     media_type = 'TV Show'
-                    session_id = stream.find('Session').attrib['id']
+                    session_id = stream.find('TranscodeSession').attrib['key']
+                    #session_id = stream.find('Session').attrib['id']
                 elif stream.attrib['type'] == 'track':
                     media_type = 'Music'
                     session_id = stream.attrib['sessionKey']
@@ -212,7 +213,10 @@ class plexInfluxdbCollector():
             req = Request('http://{}:32400/library/sections'.format(server))
             req = self._set_default_headers(req)
 
-            result = urlopen(req).read().decode('utf-8')
+            try:
+                result = urlopen(req).read().decode('utf-8')
+            except Exception as e:
+                print(e)
 
             libs = ET.fromstring(result)
 
@@ -221,7 +225,10 @@ class plexInfluxdbCollector():
                 for i in range(1, len(libs) + 1):
                     req = Request('http://{}:32400/library/sections/{}/all'.format(server, i))
                     req = self._set_default_headers(req)
-                    result = urlopen(req).read().decode('utf-8')
+                    try:
+                        result = urlopen(req).read().decode('utf-8')
+                    except Exception as e:
+                        pass
                     lib_root = ET.fromstring(result)
                     host_libs.append({
                         'name': lib_root.attrib['librarySectionTitle'],
@@ -296,6 +303,7 @@ class configManager():
             sys.exit(1)
 
         self._load_config_values()
+        self._validate_plex_servers()
         print('Configuration Successfully Loaded')
 
     def _load_config_values(self):
@@ -316,10 +324,36 @@ class configManager():
 
 
         if servers:
-            self.plex_servers = self.config['PLEX']['Servers'].split(',')
+            self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
         else:
             print('ERROR: No Plex Servers Provided.  Aborting')
             sys.exit(1)
+
+    def _validate_plex_servers(self):
+        """
+        Make sure the servers provided in the config can be resolved.  Abort if they can't
+        :return:
+        """
+        failed_servers = []
+        for server in self.plex_servers:
+            server_url = 'http://{}:32400'.format(server)
+            try:
+                urlopen(server_url)
+            except URLError as e:
+                # If it's 401 it's a valid server but we're not authorized yet
+                if hasattr(e, 'code') and e.code == 401:
+                    continue
+                print('ERROR: Failed To Connect To Flex Server At: ' + server_url)
+                failed_servers.append(server)
+
+        # Do we have any valid servers left?
+        if len(self.plex_servers) != len(failed_servers):
+            print('INFO: Found {} Bad Server(s).  Removing Them From List'.format(str(len(failed_servers))))
+            for server in failed_servers:
+                self.plex_servers.remove(server)
+        else:
+            print('ERROR: No Valid Servers Provided.  Check Server Addresses And Try Again')
+
 
 
 def main():
