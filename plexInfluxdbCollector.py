@@ -8,6 +8,7 @@ import time
 from urllib.error import HTTPError, URLError
 import configparser
 import logging
+import argparse
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
@@ -16,9 +17,9 @@ from requests.exceptions import ConnectionError
 
 class plexInfluxdbCollector():
 
-    def __init__(self):
+    def __init__(self, config=None):
 
-        self.config = configManager()
+        self.config = configManager(config=config)
 
         self.servers = self.config.plex_servers
         self.output = self.config.output
@@ -432,14 +433,14 @@ class plexInfluxdbCollector():
 
 class configManager():
 
-    def __init__(self):
+    def __init__(self, config):
         print('Loading Configuration File')
-        config_file = os.path.join(os.getcwd(), 'config.ini')
+        config_file = os.path.join(os.getcwd(), config)
         if os.path.isfile(config_file):
             self.config = configparser.ConfigParser()
             self.config.read(config_file)
         else:
-            print('ERROR: Unable To Load Config File')
+            print('ERROR: Unable To Load Config File: {}'.format(config_file))
             sys.exit(1)
 
         self._load_config_values()
@@ -521,7 +522,11 @@ class configManager():
 
 def main():
 
-    collector = plexInfluxdbCollector()
+    parser = argparse.ArgumentParser(description="A tool to send Plex statistics to InfluxDB")
+    parser.add_argument('--config', default='config.ini', dest='config', help='Specify a custom location for the config file')
+    args = parser.parse_args()
+
+    collector = plexInfluxdbCollector(config=args.config)
     collector.run()
 
 
