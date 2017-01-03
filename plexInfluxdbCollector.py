@@ -2,7 +2,8 @@ from urllib.request import Request, urlopen
 import urllib.parse
 import base64
 import json
-import os, sys
+import os
+import sys
 import xml.etree.ElementTree as ET
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
@@ -10,6 +11,7 @@ import time
 from urllib.error import HTTPError, URLError
 import configparser
 from requests.exceptions import ConnectionError
+
 
 class plexInfluxdbCollector():
 
@@ -22,10 +24,14 @@ class plexInfluxdbCollector():
         self.token = None
         self._report_combined_streams = True
         self.delay = self.config.delay
-        self.influx_client = InfluxDBClient(self.config.influx_address, self.config.influx_port, database=self.config.influx_database)
+        self.influx_client = InfluxDBClient(
+            self.config.influx_address,
+            self.config.influx_port,
+            database=self.config.influx_database,
+            ssl=self.config.influx_ssl,
+            verify_ssl=self.config.influx_verify_ssl
+        )
         self._get_auth_token(self.config.plex_user, self.config.plex_password)
-
-
 
     def _get_auth_token(self, username, password):
         """
@@ -53,7 +59,6 @@ class plexInfluxdbCollector():
                 print('Maybe this will help:')
                 print(e)
             sys.exit(1)
-
 
         output = json.loads(result.decode('utf-8'))
 
@@ -84,7 +89,7 @@ class plexInfluxdbCollector():
             if k == 'X-Plex-Token' and not self.token:  # Don't add token if we don't have it yet
                 continue
 
-            req.add_header(k,v)
+            req.add_header(k, v)
 
         return req
 
@@ -105,7 +110,6 @@ class plexInfluxdbCollector():
             result = urlopen(req).read().decode('utf-8')
 
             streams = ET.fromstring(result)
-
 
             active_streams[server] = streams
 
@@ -139,14 +143,18 @@ class plexInfluxdbCollector():
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
-
+                session_id = None
                 # Figure Out Media Type and Get Session ID
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
-                    session_id = stream.find('TranscodeSession').attrib['key']
+                    transcodeSession = stream.find('TranscodeSession')
+                    if transcodeSession:
+                        session_id = transcodeSession.attrib['key']
                 elif stream.attrib['type'] == 'episode':
                     media_type = 'TV Show'
-                    session_id = stream.find('TranscodeSession').attrib['key']
+                    transcodeSession = stream.find('TranscodeSession')
+                    if transcodeSession:
+                        session_id = transcodeSession.attrib['key']
                     #session_id = stream.find('Session').attrib['id']
                 elif stream.attrib['type'] == 'track':
                     media_type = 'Music'
@@ -200,7 +208,6 @@ class plexInfluxdbCollector():
             ]
 
             self.write_influx_data(combined_stream_points)
-
 
     def get_library_data(self):
         """
@@ -278,7 +285,6 @@ class plexInfluxdbCollector():
             print('ERROR: Failed To Write To InfluxDB')
             print(e)
 
-
     def run(self):
 
         print('Starting Monitoring Loop \n ')
@@ -289,6 +295,7 @@ class plexInfluxdbCollector():
             self.get_library_data()
             self.get_active_streams()
             time.sleep(self.delay)
+
 
 class configManager():
 
@@ -316,12 +323,13 @@ class configManager():
         self.influx_address = self.config['INFLUXDB']['Address']
         self.influx_port = self.config['INFLUXDB'].getint('Port', fallback=8086)
         self.influx_database = self.config['INFLUXDB'].get('Database', fallback='plex_data')
+        self.influx_ssl = self.config['INFLUXDB'].getboolean('SSL', fallback=False)
+        self.influx_verify_ssl = self.config['INFLUXDB'].getboolean('Verify_SSL', fallback=True)
 
         # Plex
         self.plex_user = self.config['PLEX']['Username']
         self.plex_password = self.config['PLEX']['Password']
         servers = len(self.config['PLEX']['Servers'])
-
 
         if servers:
             self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
@@ -355,12 +363,10 @@ class configManager():
             print('ERROR: No Valid Servers Provided.  Check Server Addresses And Try Again')
 
 
-
 def main():
 
     collector = plexInfluxdbCollector()
     collector.run()
-
 
 
 if __name__ == '__main__':
