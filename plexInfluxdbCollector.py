@@ -166,8 +166,14 @@ class plexInfluxdbCollector():
             req = Request(req_uri)
             self._set_default_headers(req)
 
-            # TODO figured out which exceptions to catch here
-            result = urlopen(req).read().decode('utf-8')
+            try:
+                result = urlopen(req).read().decode('utf-8')
+            except URLError as e:
+                self.send_log('Failed To Get Current Sessions', 'error')
+                self.send_log(e, 'error')
+                print('ERROR: Failed to get current sessions')
+                print(e)
+                return
 
             streams = ET.fromstring(result)
 
@@ -525,7 +531,6 @@ def main():
     parser = argparse.ArgumentParser(description="A tool to send Plex statistics to InfluxDB")
     parser.add_argument('--config', default='config.ini', dest='config', help='Specify a custom location for the config file')
     args = parser.parse_args()
-
     collector = plexInfluxdbCollector(config=args.config)
     collector.run()
 
