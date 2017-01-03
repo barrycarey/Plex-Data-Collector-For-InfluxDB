@@ -24,7 +24,13 @@ class plexInfluxdbCollector():
         self.token = None
         self._report_combined_streams = True
         self.delay = self.config.delay
-        self.influx_client = InfluxDBClient(self.config.influx_address, self.config.influx_port, database=self.config.influx_database)
+        self.influx_client = InfluxDBClient(
+            self.config.influx_address,
+            self.config.influx_port,
+            database=self.config.influx_database,
+            ssl=self.config.influx_ssl,
+            verify_ssl=self.config.influx_verify_ssl
+        )
         self._get_auth_token(self.config.plex_user, self.config.plex_password)
 
     def _get_auth_token(self, username, password):
@@ -313,6 +319,8 @@ class configManager():
         self.influx_address = self.config['INFLUXDB']['Address']
         self.influx_port = self.config['INFLUXDB'].getint('Port', fallback=8086)
         self.influx_database = self.config['INFLUXDB'].get('Database', fallback='plex_data')
+        self.influx_ssl = self.config['INFLUXDB'].getboolean('SSL', fallback=False)
+        self.influx_verify_ssl = self.config['INFLUXDB'].getboolean('Verify_SSL', fallback=True)
 
         # Plex
         self.plex_user = self.config['PLEX']['Username']
