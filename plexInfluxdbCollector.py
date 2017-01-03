@@ -143,14 +143,18 @@ class plexInfluxdbCollector():
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
-
+                session_id = None
                 # Figure Out Media Type and Get Session ID
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
-                    session_id = stream.find('TranscodeSession').attrib['key']
+                    transcodeSession = stream.find('TranscodeSession')
+                    if transcodeSession:
+                        session_id = transcodeSession.attrib['key']
                 elif stream.attrib['type'] == 'episode':
                     media_type = 'TV Show'
-                    session_id = stream.find('TranscodeSession').attrib['key']
+                    transcodeSession = stream.find('TranscodeSession')
+                    if transcodeSession:
+                        session_id = transcodeSession.attrib['key']
                     #session_id = stream.find('Session').attrib['id']
                 elif stream.attrib['type'] == 'track':
                     media_type = 'Music'
