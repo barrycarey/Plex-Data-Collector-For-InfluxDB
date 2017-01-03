@@ -115,6 +115,17 @@ class plexInfluxdbCollector():
 
         self._process_active_streams(active_streams)
 
+    def _get_session_id(self, stream):
+        session = stream.find('Session')
+        if session:
+            return session.attrib['id']
+        transcodeSession = stream.find('TranscodeSession')
+        if transcodeSession:
+            return transcodeSession.attrib['id']
+        if 'sessionKey' in stream.attrib:
+            return stream.attrib['sessionKey']
+        return 'N/A'
+
     def _process_active_streams(self, stream_data):
         """
         Take an object of stream data and create Influx JSON data
@@ -143,25 +154,15 @@ class plexInfluxdbCollector():
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
-                session_id = None
-                # Figure Out Media Type and Get Session ID
+                session_id = self._get_session_id(stream)
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
-                    transcodeSession = stream.find('TranscodeSession')
-                    if transcodeSession:
-                        session_id = transcodeSession.attrib['key']
                 elif stream.attrib['type'] == 'episode':
                     media_type = 'TV Show'
-                    transcodeSession = stream.find('TranscodeSession')
-                    if transcodeSession:
-                        session_id = transcodeSession.attrib['key']
-                    #session_id = stream.find('Session').attrib['id']
                 elif stream.attrib['type'] == 'track':
                     media_type = 'Music'
-                    session_id = stream.attrib['sessionKey']
                 else:
                     media_type = 'Unknown'
-                    session_id = 'N/A'
 
                 # Build the title. TV and Music Have a root title plus episode/track name.  Movies don't
                 if 'grandparentTitle' in stream.attrib:
