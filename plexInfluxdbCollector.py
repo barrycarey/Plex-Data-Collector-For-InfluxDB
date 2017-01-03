@@ -1,15 +1,16 @@
 from urllib.request import Request, urlopen
-import urllib.parse
 import base64
 import json
 import os
 import sys
 import xml.etree.ElementTree as ET
-from influxdb import InfluxDBClient
-from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 import time
 from urllib.error import HTTPError, URLError
 import configparser
+import logging
+
+from influxdb import InfluxDBClient
+from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from requests.exceptions import ConnectionError
 
 
@@ -22,7 +23,8 @@ class plexInfluxdbCollector():
         self.servers = self.config.plex_servers
         self.output = self.config.output
         self.token = None
-        self._report_combined_streams = True
+        self.logger = None
+        self._report_combined_streams = True # TODO Move to config
         self.delay = self.config.delay
         self.influx_client = InfluxDBClient(
             self.config.influx_address,
@@ -31,7 +33,54 @@ class plexInfluxdbCollector():
             ssl=self.config.influx_ssl,
             verify_ssl=self.config.influx_verify_ssl
         )
+        self._set_logging()
         self._get_auth_token(self.config.plex_user, self.config.plex_password)
+
+    def _set_logging(self):
+        """
+        Create the logger object if enabled in the config
+        :return: None
+        """
+
+        if self.config.logging:
+            print('Logging is enabled.  Log output will be sent to {}'.format(self.config.logging_file))
+            self.logger = logging.getLogger(__name__)
+            self.logger.setLevel(self.config.logging_level)
+            formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+            fhandle = logging.FileHandler(self.config.logging_file)
+            fhandle.setFormatter(formatter)
+            self.logger.addHandler(fhandle)
+
+    def send_log(self, msg, level):
+        """
+        Used as a shim to write log messages.  Allows us to sanitize input before logging
+        :param msg: Message to log
+        :param level: Level to log message at
+        :return: None
+        """
+
+        if not self.logger:
+            return
+
+        # Make sure a good level was given
+        if not hasattr(self.logger, level):
+            self.logger.error('Invalid log level provided to send_log')
+            return
+
+        output = self._sanitize_log_message(msg)
+
+        log_method = getattr(self.logger, level)
+        log_method(output)
+
+    def _sanitize_log_message(self, msg):
+        """
+        Take the incoming log message and clean and sensitive data out
+        :param msg: incoming message string
+        :return: cleaned message string
+        """
+        for server in self.servers:
+            msg = msg.replace(server, '*******')
+        return msg
 
     def _get_auth_token(self, username, password):
         """
@@ -42,6 +91,8 @@ class plexInfluxdbCollector():
         """
 
         print('Getting Auth Token For User {}'.format(username))
+
+        self.send_log('Attempting to get authentication token', 'info')
 
         auth_string = '{}:{}'.format(username, password)
         base_auth = base64.encodebytes(bytes(auth_string, 'utf-8'))
@@ -55,9 +106,11 @@ class plexInfluxdbCollector():
             print('Failed To Get Authentication Token')
             if e.code == 401:
                 print('This is likely due to a bad username or password')
+                self.send_log('Failed to get token due to bad username/password', 'error')
             else:
                 print('Maybe this will help:')
                 print(e)
+                self.send_log('Failed to get authentication token.  No idea why', 'error')
             sys.exit(1)
 
         output = json.loads(result.decode('utf-8'))
@@ -70,6 +123,7 @@ class plexInfluxdbCollector():
             sys.exit(1)
 
         print('Successfully Retrieved Auth Token Of: {}'.format(self.token))
+        self.send_log('Success.  We got the token', 'info')
 
     def _set_default_headers(self, req):
         """
@@ -77,6 +131,8 @@ class plexInfluxdbCollector():
         :param req:
         :return:
         """
+
+        self.send_log('Adding Request Headers', 'info')
 
         headers = {
             'X-Plex-Client-Identifier': 'Plex InfluxDB Collector',
@@ -95,15 +151,18 @@ class plexInfluxdbCollector():
 
     def get_active_streams(self):
         """
-
-        :param server:
+        Processes the Plex session list
         :return:
         """
-
+        self.send_log('Getting active streams', 'info')
         active_streams = {}
 
         for server in self.servers:
-            req = Request('http://{}:32400/status/sessions'.format(server))
+            req_uri = 'http://{}:32400/status/sessions'.format(server)
+
+            self.send_log('Attempting to get all libraries with URL: {}'.format(req_uri), 'info')
+
+            req = Request(req_uri)
             self._set_default_headers(req)
 
             # TODO figured out which exceptions to catch here
@@ -132,6 +191,9 @@ class plexInfluxdbCollector():
         :param stream_data:
         :return:
         """
+
+        self.send_log('Processing Active Streams', 'info')
+
         combined_streams = 0
 
         for host, streams in stream_data.items():
@@ -154,7 +216,15 @@ class plexInfluxdbCollector():
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
+
                 session_id = self._get_session_id(stream)
+
+
+                
+  
+                session_id = None
+                # Figure Out Media Type and Get Session ID
+
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
                 elif stream.attrib['type'] == 'episode':
@@ -175,6 +245,33 @@ class plexInfluxdbCollector():
                 else:
                     resolution = stream.find('Media').attrib['bitrate'] + 'Kbps'
 
+                    self.send_log('Title: {}'.format(full_title), 'debug')
+                    self.send_log('Media Type: {}'.format(media_type), 'debug')
+                    self.send_log('Session ID: {}'.format(session_id), 'debug')
+                    self.send_log('Title: {}'.format(resolution), 'debug')
+
+                """
+                playing_points = [
+                    {
+                        'measurement': 'now_playing',
+                        'fields': {
+                            'session_id': session_id
+                         },
+                        'tags': {
+                            'host': host,
+                            'player_address': stream.find('Player').attrib['address'],
+
+                            'media_type': media_type,
+                            'resolution': resolution,
+                            'user': stream.find('User').attrib['title'],
+                            'stream_title': full_title,
+                            'player': stream.find('Player').attrib['title'],
+                        }
+                    }
+                ]
+
+                # Working Layout
+                """
                 playing_points = [
                     {
                         'measurement': 'now_playing',
@@ -183,7 +280,7 @@ class plexInfluxdbCollector():
                             'player': stream.find('Player').attrib['title'],
                             'user': stream.find('User').attrib['title'],
                             'resolution': resolution,
-                            'media_type': media_type
+                            'media_type': media_type,
                         },
                         'tags': {
                             'host': host,
@@ -218,25 +315,40 @@ class plexInfluxdbCollector():
         lib_data = {}
 
         for server in self.servers:
-            req = Request('http://{}:32400/library/sections'.format(server))
+            req_uri = 'http://{}:32400/library/sections'.format(server)
+            self.send_log('Attempting to get all libraries with URL: {}'.format(req_uri), 'info')
+            req = Request(req_uri)
             req = self._set_default_headers(req)
 
             try:
                 result = urlopen(req).read().decode('utf-8')
-            except Exception as e:
+            except URLError as e:
+                msg = 'ERROR: Failed To Get Library Data From {}'.format(req_uri)
+                print(msg)
                 print(e)
 
+                self.send_log(msg, 'error')
+
+                return
+
             libs = ET.fromstring(result)
+
+            self.send_log('We found {} libraries'.format(str(len(libs))), 'info')
 
             host_libs = []
             if len(libs) > 0:
                 for i in range(1, len(libs) + 1):
-                    req = Request('http://{}:32400/library/sections/{}/all'.format(server, i))
+                    req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, i)
+                    self.send_log('Attempting to get library {} with URL: {}'.format(i, req_uri), 'info')
+                    req = Request(req_uri)
                     req = self._set_default_headers(req)
+
                     try:
                         result = urlopen(req).read().decode('utf-8')
-                    except Exception as e:
-                        pass
+                    except URLError as e:
+                        self.send_log('Failed to get library {}.  {}'.format(i, e), 'error')
+                        continue
+
                     lib_root = ET.fromstring(result)
                     host_libs.append({
                         'name': lib_root.attrib['librarySectionTitle'],
@@ -250,6 +362,9 @@ class plexInfluxdbCollector():
         """
         Breakdown the provided library data and format for InfluxDB
         """
+
+        self.send_log('Processing Library Data', 'info')
+
         for host, data in lib_data.items():
             for lib in data:
                 lib_points = [
@@ -274,21 +389,33 @@ class plexInfluxdbCollector():
         """
         if self.output:
             print(json_data)
+
+        self.send_log('Writing Data To InfluxDB ', 'info')
+
         try:
             self.influx_client.write_points(json_data)
         except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
             if hasattr(e, 'code') and e.code == 404:
                 print('Database {} Does Not Exist.  Attempting To Create')
+
+                self.send_log('Database {} Does Not Exist.  Attempting To Create', 'error')
+
                 # TODO Grab exception here
                 self.influx_client.create_database(self.config.influx_database)
                 self.influx_client.write_points(json_data)
+
                 return
+
+            self.send_log('Failed to write data to InfluxDB', 'error')
+
             print('ERROR: Failed To Write To InfluxDB')
             print(e)
 
     def run(self):
 
         print('Starting Monitoring Loop \n ')
+        self.send_log('Starting Monitoring Loop', 'info')
+
         if not self.output:
             print('There will be no further output unless something explodes')
 
@@ -312,6 +439,7 @@ class configManager():
 
         self._load_config_values()
         self._validate_plex_servers()
+        self._validate_logging_level()
         print('Configuration Successfully Loaded')
 
     def _load_config_values(self):
@@ -331,6 +459,12 @@ class configManager():
         self.plex_user = self.config['PLEX']['Username']
         self.plex_password = self.config['PLEX']['Password']
         servers = len(self.config['PLEX']['Servers'])
+
+        #Logging
+        self.logging = self.config['LOGGING'].getboolean('Enable', fallback=False)
+        self.logging_level = self.config['LOGGING']['Level'].lower()
+        self.logging_file = self.config['LOGGING']['LogFile']
+        self.logging_hide_server = self.config['LOGGING'].getboolean('HideServer', fallback=True)
 
         if servers:
             self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
@@ -352,7 +486,7 @@ class configManager():
                 # If it's 401 it's a valid server but we're not authorized yet
                 if hasattr(e, 'code') and e.code == 401:
                     continue
-                print('ERROR: Failed To Connect To Flex Server At: ' + server_url)
+                print('ERROR: Failed To Connect To Plex Server At: ' + server_url)
                 failed_servers.append(server)
 
         # Do we have any valid servers left?
@@ -362,6 +496,22 @@ class configManager():
                 self.plex_servers.remove(server)
         else:
             print('ERROR: No Valid Servers Provided.  Check Server Addresses And Try Again')
+
+    def _validate_logging_level(self):
+        """
+        Make sure we get a valid logging level
+        :return:
+        """
+
+        valid_levels = ['critical', 'error', 'warning', 'info', 'debug']
+        if self.logging_level in valid_levels:
+            self.logging_level = self.logging_level.upper()
+            return
+        else:
+            print('Invalid logging level provided. {}'.format(self.logging_level))
+            print('Logging will be disabled')
+            print('Valid options are: {}'.format(', '.join(valid_levels)))
+            self.logging = None
 
 
 def main():
