@@ -175,14 +175,25 @@ class plexInfluxdbCollector():
         self._process_active_streams(active_streams)
 
     def _get_session_id(self, stream):
+        """
+        Find a unique key to identify the stream.  In most cases it will be the sessionKey.  If this does not exist,
+        fall back to the TranscodeSession key.
+        :param stream: XML object of the stream
+        :return:
+        """
         session = stream.find('Session')
-        if session:
-            return session.attrib['id']
-        transcodeSession = stream.find('TranscodeSession')
-        if transcodeSession:
-            return transcodeSession.attrib['id']
+
         if 'sessionKey' in stream.attrib:
             return stream.attrib['sessionKey']
+
+        if session:
+            return session.attrib['id']
+
+        transcodeSession = stream.find('TranscodeSession')
+
+        if transcodeSession:
+            return transcodeSession.attrib['id']
+
         return 'N/A'
 
     def _process_active_streams(self, stream_data):
@@ -219,12 +230,6 @@ class plexInfluxdbCollector():
 
                 session_id = self._get_session_id(stream)
 
-
-                
-  
-                session_id = None
-                # Figure Out Media Type and Get Session ID
-
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
                 elif stream.attrib['type'] == 'episode':
@@ -245,10 +250,10 @@ class plexInfluxdbCollector():
                 else:
                     resolution = stream.find('Media').attrib['bitrate'] + 'Kbps'
 
-                    self.send_log('Title: {}'.format(full_title), 'debug')
-                    self.send_log('Media Type: {}'.format(media_type), 'debug')
-                    self.send_log('Session ID: {}'.format(session_id), 'debug')
-                    self.send_log('Title: {}'.format(resolution), 'debug')
+                self.send_log('Title: {}'.format(full_title), 'debug')
+                self.send_log('Media Type: {}'.format(media_type), 'debug')
+                self.send_log('Session ID: {}'.format(session_id), 'debug')
+                self.send_log('Title: {}'.format(resolution), 'debug')
 
                 """
                 playing_points = [
