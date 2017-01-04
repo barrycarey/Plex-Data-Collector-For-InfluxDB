@@ -362,10 +362,17 @@ class plexInfluxdbCollector():
                         continue
 
                     lib_root = ET.fromstring(result)
-                    host_libs.append({
+                    host_lib = {
                         'name': lib_root.attrib['librarySectionTitle'],
                         'items': len(lib_root)
-                    })
+                    }
+                    if lib_root.attrib['librarySectionTitle'] == "TV Shows":
+                        host_lib['episodes'] = 0
+                        host_lib['seasons'] = 0
+                        for show in lib_root:
+                            host_lib['episodes'] += int(show.attrib['leafCount'])
+                            host_lib['seasons'] += int(show.attrib['childCount'])
+                    host_libs.append(host_lib)
                 lib_data[server] = host_libs
 
         self._process_library_data(lib_data)
@@ -379,12 +386,16 @@ class plexInfluxdbCollector():
 
         for host, data in lib_data.items():
             for lib in data:
+                fields = {
+                    'items': lib['items'],
+                }
+                for c in ['episodes', 'seasons']:
+                    if c in lib:
+                        fields[c] = lib[c]
                 lib_points = [
                     {
                         'measurement': 'libraries',
-                        'fields': {
-                            'items': lib['items']
-                        },
+                        'fields': fields,
                         'tags': {
                             'lib_name': lib['name'],
                             'host': host
