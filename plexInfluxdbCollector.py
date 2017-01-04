@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 import configparser
 import logging
 import argparse
+import re
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
@@ -79,8 +80,18 @@ class plexInfluxdbCollector():
         :param msg: incoming message string
         :return: cleaned message string
         """
+
+        if not self.config.logging_censor:
+            return msg
+
+        # Remove server addresses
         for server in self.servers:
             msg = msg.replace(server, '*******')
+
+        # Remove IP addresses
+        for match in re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", msg):
+            msg = msg.replace(match, '***.***.***.***')
+
         return msg
 
     def _get_auth_token(self, username, password):
@@ -345,7 +356,7 @@ class plexInfluxdbCollector():
 
             libs = ET.fromstring(result)
 
-            self.send_log('We found {} libraries'.format(str(len(libs))), 'info')
+            self.send_log('We found {} libraries for server {}'.format(str(len(libs)), server), 'info')
 
             host_libs = []
             if len(libs) > 0:
@@ -413,8 +424,6 @@ class plexInfluxdbCollector():
         if self.output:
             print(json_data)
 
-        self.send_log('Writing Data To InfluxDB ', 'info')
-
         try:
             self.influx_client.write_points(json_data)
         except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
@@ -433,6 +442,8 @@ class plexInfluxdbCollector():
 
             print('ERROR: Failed To Write To InfluxDB')
             print(e)
+
+        self.send_log('Written To Influx: {}'.format(json_data), 'debug')
 
     def run(self):
 
@@ -487,7 +498,7 @@ class configManager():
         self.logging = self.config['LOGGING'].getboolean('Enable', fallback=False)
         self.logging_level = self.config['LOGGING']['Level'].lower()
         self.logging_file = self.config['LOGGING']['LogFile']
-        self.logging_hide_server = self.config['LOGGING'].getboolean('HideServer', fallback=True)
+        self.logging_censor = self.config['LOGGING'].getboolean('CensorLogs', fallback=True)
 
         if servers:
             self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
