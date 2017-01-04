@@ -80,14 +80,8 @@
   },
   "refresh": "5s",
   "schemaVersion": 13,
-  "version": 2,
-  "links": [
-    {
-      "icon": "external link",
-      "tags": [],
-      "type": "dashboards"
-    }
-  ],
+  "version": 3,
+  "links": [],
   "gnetId": null,
   "rows": [
     {
