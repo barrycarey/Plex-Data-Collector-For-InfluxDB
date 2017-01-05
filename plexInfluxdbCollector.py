@@ -360,16 +360,19 @@ class plexInfluxdbCollector():
 
             host_libs = []
             if len(libs) > 0:
-                for i in range(1, len(libs) + 1):
-                    req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, i)
-                    self.send_log('Attempting to get library {} with URL: {}'.format(i, req_uri), 'info')
+                lib_keys = [lib.attrib['key'] for lib in libs]  # TODO probably should catch exception here
+                print(','.join(lib_keys))
+                self.send_log('Scanning libraries on server {} with keys {}'.format(server, ','.join(lib_keys)), 'info')
+                for key in lib_keys:
+                    req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, key)
+                    self.send_log('Attempting to get library {} with URL: {}'.format(key, req_uri), 'info')
                     req = Request(req_uri)
                     req = self._set_default_headers(req)
 
                     try:
                         result = urlopen(req).read().decode('utf-8')
                     except URLError as e:
-                        self.send_log('Failed to get library {}.  {}'.format(i, e), 'error')
+                        self.send_log('Failed to get library {}.  {}'.format(key, e), 'error')
                         continue
 
                     lib_root = ET.fromstring(result)
