@@ -361,7 +361,6 @@ class plexInfluxdbCollector():
             host_libs = []
             if len(libs) > 0:
                 lib_keys = [lib.attrib['key'] for lib in libs]  # TODO probably should catch exception here
-                print(','.join(lib_keys))
                 self.send_log('Scanning libraries on server {} with keys {}'.format(server, ','.join(lib_keys)), 'info')
                 for key in lib_keys:
                     req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, key)
