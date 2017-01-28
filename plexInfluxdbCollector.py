@@ -16,11 +16,13 @@ from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from requests.exceptions import ConnectionError
 
 
+#TODO Build word blacklist for logs.
+
 class plexInfluxdbCollector():
 
-    def __init__(self, config=None):
+    def __init__(self, silent, config=None):
 
-        self.config = configManager(config=config)
+        self.config = configManager(silent, config=config)
 
         self.servers = self.config.plex_servers
         self.output = self.config.output
@@ -33,7 +35,10 @@ class plexInfluxdbCollector():
             self.config.influx_port,
             database=self.config.influx_database,
             ssl=self.config.influx_ssl,
-            verify_ssl=self.config.influx_verify_ssl
+            verify_ssl=self.config.influx_verify_ssl,
+            username=self.config.influx_user,
+            password=self.config.influx_password
+
         )
         self._set_logging()
         self._get_auth_token(self.config.plex_user, self.config.plex_password)
@@ -45,7 +50,8 @@ class plexInfluxdbCollector():
         """
 
         if self.config.logging:
-            print('Logging is enabled.  Log output will be sent to {}'.format(self.config.logging_file))
+            if self.output:
+                print('Logging is enabled.  Log output will be sent to {}'.format(self.config.logging_file))
             self.logger = logging.getLogger(__name__)
             self.logger.setLevel(self.config.logging_level)
             formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
@@ -63,6 +69,9 @@ class plexInfluxdbCollector():
 
         if not self.logger:
             return
+
+        if self.output and self.config.valid_log_levels[level.upper()] >= self.config.logging_print_threshold:
+            print(msg)
 
         # Make sure a good level was given
         if not hasattr(self.logger, level):
@@ -84,6 +93,10 @@ class plexInfluxdbCollector():
         if not self.config.logging_censor:
             return msg
 
+        msg = msg.replace(self.config.plex_user, '********')
+        if self.token:
+            msg = msg.replace(self.token, '********')
+
         # Remove server addresses
         for server in self.servers:
             msg = msg.replace(server, '*******')
@@ -102,9 +115,7 @@ class plexInfluxdbCollector():
         :return:
         """
 
-        print('Getting Auth Token For User {}'.format(username))
-
-        self.send_log('Attempting to get authentication token', 'info')
+        self.send_log('Getting Auth Token For User {}'.format(username), 'info')
 
         auth_string = '{}:{}'.format(username, password)
         base_auth = base64.encodebytes(bytes(auth_string, 'utf-8'))
@@ -134,8 +145,7 @@ class plexInfluxdbCollector():
             print('Something Broke \n We got a valid response but for some reason there\'s no auth token')
             sys.exit(1)
 
-        print('Successfully Retrieved Auth Token Of: {}'.format(self.token))
-        self.send_log('Success.  We got the token', 'info')
+        self.send_log('Successfully Retrieved Auth Token Of: {}'.format(self.token), 'info')
 
     def _set_default_headers(self, req):
         """
@@ -144,7 +154,7 @@ class plexInfluxdbCollector():
         :return:
         """
 
-        self.send_log('Adding Request Headers', 'info')
+        self.send_log('Adding Request Headers', 'debug')
 
         headers = {
             'X-Plex-Client-Identifier': 'Plex InfluxDB Collector',
@@ -166,7 +176,7 @@ class plexInfluxdbCollector():
         Processes the Plex session list
         :return:
         """
-        self.send_log('Getting active streams', 'info')
+        self.send_log('Getting active streams', 'debug')
         active_streams = {}
 
         for server in self.servers:
@@ -181,9 +191,6 @@ class plexInfluxdbCollector():
                 result = urlopen(req).read().decode('utf-8')
             except URLError as e:
                 self.send_log('Failed To Get Current Sessions', 'error')
-                self.send_log(e, 'error')
-                print('ERROR: Failed to get current sessions')
-                print(e)
                 return
 
             streams = ET.fromstring(result)
@@ -346,12 +353,7 @@ class plexInfluxdbCollector():
             try:
                 result = urlopen(req).read().decode('utf-8')
             except URLError as e:
-                msg = 'ERROR: Failed To Get Library Data From {}'.format(req_uri)
-                print(msg)
-                print(e)
-
-                self.send_log(msg, 'error')
-
+                self.send_log('ERROR: Failed To Get Library Data From {}'.format(req_uri), 'error')
                 return
 
             libs = ET.fromstring(result)
@@ -361,8 +363,8 @@ class plexInfluxdbCollector():
             host_libs = []
             if len(libs) > 0:
                 lib_keys = [lib.attrib['key'] for lib in libs]  # TODO probably should catch exception here
-                print(','.join(lib_keys))
                 self.send_log('Scanning libraries on server {} with keys {}'.format(server, ','.join(lib_keys)), 'info')
+
                 for key in lib_keys:
                     req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, key)
                     self.send_log('Attempting to get library {} with URL: {}'.format(key, req_uri), 'info')
@@ -431,7 +433,6 @@ class plexInfluxdbCollector():
             self.influx_client.write_points(json_data)
         except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
             if hasattr(e, 'code') and e.code == 404:
-                print('Database {} Does Not Exist.  Attempting To Create')
 
                 self.send_log('Database {} Does Not Exist.  Attempting To Create', 'error')
 
@@ -443,18 +444,11 @@ class plexInfluxdbCollector():
 
             self.send_log('Failed to write data to InfluxDB', 'error')
 
-            print('ERROR: Failed To Write To InfluxDB')
-            print(e)
-
         self.send_log('Written To Influx: {}'.format(json_data), 'debug')
 
     def run(self):
 
-        print('Starting Monitoring Loop \n ')
         self.send_log('Starting Monitoring Loop', 'info')
-
-        if not self.output:
-            print('There will be no further output unless something explodes')
 
         while True:
             self.get_library_data()
@@ -464,8 +458,20 @@ class plexInfluxdbCollector():
 
 class configManager():
 
-    def __init__(self, config):
-        print('Loading Configuration File')
+    def __init__(self, silent, config):
+
+        self.valid_log_levels = {
+            'DEBUG': 0,
+            'INFO': 1,
+            'WARNING': 2,
+            'ERROR': 3,
+            'CRITICAL': 4
+        }
+        self.silent = silent
+
+        if not self.silent:
+            print('Loading Configuration File {}'.format(config))
+
         config_file = os.path.join(os.getcwd(), config)
         if os.path.isfile(config_file):
             self.config = configparser.ConfigParser()
@@ -477,13 +483,17 @@ class configManager():
         self._load_config_values()
         self._validate_plex_servers()
         self._validate_logging_level()
-        print('Configuration Successfully Loaded')
+        if not self.silent:
+            print('Configuration Successfully Loaded')
 
     def _load_config_values(self):
 
         # General
         self.delay = self.config['GENERAL'].getint('Delay', fallback=2)
-        self.output = self.config['GENERAL'].getboolean('Output', fallback=True)
+        if not self.silent:
+            self.output = self.config['GENERAL'].getboolean('Output', fallback=True)
+        else:
+            self.output = None
 
         # InfluxDB
         self.influx_address = self.config['INFLUXDB']['Address']
@@ -491,6 +501,8 @@ class configManager():
         self.influx_database = self.config['INFLUXDB'].get('Database', fallback='plex_data')
         self.influx_ssl = self.config['INFLUXDB'].getboolean('SSL', fallback=False)
         self.influx_verify_ssl = self.config['INFLUXDB'].getboolean('Verify_SSL', fallback=True)
+        self.influx_user = self.config['INFLUXDB'].get('Username', fallback='')
+        self.influx_password = self.config['INFLUXDB'].get('Password', fallback='')
 
         # Plex
         self.plex_user = self.config['PLEX']['Username']
@@ -499,9 +511,10 @@ class configManager():
 
         #Logging
         self.logging = self.config['LOGGING'].getboolean('Enable', fallback=False)
-        self.logging_level = self.config['LOGGING']['Level'].lower()
+        self.logging_level = self.config['LOGGING']['Level'].upper()
         self.logging_file = self.config['LOGGING']['LogFile']
         self.logging_censor = self.config['LOGGING'].getboolean('CensorLogs', fallback=True)
+        self.logging_print_threshold = self.config['LOGGING'].getint('PrintThreshold', fallback=2)
 
         if servers:
             self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
@@ -523,16 +536,20 @@ class configManager():
                 # If it's 401 it's a valid server but we're not authorized yet
                 if hasattr(e, 'code') and e.code == 401:
                     continue
-                print('ERROR: Failed To Connect To Plex Server At: ' + server_url)
+                if not self.silent:
+                    print('ERROR: Failed To Connect To Plex Server At: ' + server_url)
                 failed_servers.append(server)
 
         # Do we have any valid servers left?
+        # TODO This check is failing even with no bad servers
         if len(self.plex_servers) != len(failed_servers):
-            print('INFO: Found {} Bad Server(s).  Removing Them From List'.format(str(len(failed_servers))))
+            if not self.silent:
+                print('INFO: Found {} Bad Server(s).  Removing Them From List'.format(str(len(failed_servers))))
             for server in failed_servers:
                 self.plex_servers.remove(server)
         else:
             print('ERROR: No Valid Servers Provided.  Check Server Addresses And Try Again')
+            sys.exit(1)
 
     def _validate_logging_level(self):
         """
@@ -540,14 +557,13 @@ class configManager():
         :return:
         """
 
-        valid_levels = ['critical', 'error', 'warning', 'info', 'debug']
-        if self.logging_level in valid_levels:
+        if self.logging_level in self.valid_log_levels:
             self.logging_level = self.logging_level.upper()
             return
         else:
-            print('Invalid logging level provided. {}'.format(self.logging_level))
-            print('Logging will be disabled')
-            print('Valid options are: {}'.format(', '.join(valid_levels)))
+            if not self.silent:
+                print('Invalid logging level provided. {}'.format(self.logging_level))
+                print('Logging will be disabled')
             self.logging = None
 
 
@@ -555,8 +571,9 @@ def main():
 
     parser = argparse.ArgumentParser(description="A tool to send Plex statistics to InfluxDB")
     parser.add_argument('--config', default='config.ini', dest='config', help='Specify a custom location for the config file')
+    parser.add_argument('--silent', action='store_true', help='Surpress All Output, regardless of config settings')
     args = parser.parse_args()
-    collector = plexInfluxdbCollector(config=args.config)
+    collector = plexInfluxdbCollector(args.silent, config=args.config)
     collector.run()
 
 
