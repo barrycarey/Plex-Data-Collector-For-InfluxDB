@@ -91,6 +91,8 @@ class plexInfluxdbCollector():
         :return: cleaned message string
         """
 
+        msg = str(msg)
+
         if not self.config.logging_censor:
             return msg
 
@@ -232,6 +234,7 @@ class plexInfluxdbCollector():
         self.send_log('Processing Active Streams', 'info')
 
         combined_streams = 0
+        session_ids = []  # Active Session IDs for this run
 
         for host, streams in stream_data.items():
 
@@ -255,6 +258,7 @@ class plexInfluxdbCollector():
             for stream in streams:
 
                 session_id = self._get_session_id(stream)
+                session_ids.append(session_id)
 
                 if session_id in self.active_streams:
                     start_time = self.active_streams[session_id]['start_time']
@@ -346,6 +350,18 @@ class plexInfluxdbCollector():
             ]
 
             self.write_influx_data(combined_stream_points)
+            self._remove_dead_streams(session_ids)
+
+    def _remove_dead_streams(self, current_streams):
+        """
+        Go through the stored list of active streams and remove any that are no longer active
+        :param current_streams: List of currently active streams from last API call
+        :return:
+        """
+
+        for id, data in self.active_streams.items():
+            if id not in current_streams:
+                self.active_streams.pop(id)
 
     def get_library_data(self):
         """
@@ -436,8 +452,7 @@ class plexInfluxdbCollector():
         :param json_data:
         :return:
         """
-        if self.output:
-            print(json_data)
+        self.send_log(json_data, 'debug')
 
         try:
             self.influx_client.write_points(json_data)
