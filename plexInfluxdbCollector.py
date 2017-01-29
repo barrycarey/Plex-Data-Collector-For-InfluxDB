@@ -28,6 +28,7 @@ class plexInfluxdbCollector():
         self.output = self.config.output
         self.token = None
         self.logger = None
+        self.active_streams = {}  # Store active streams so we can track duration
         self._report_combined_streams = True # TODO Move to config
         self.delay = self.config.delay
         self.influx_client = InfluxDBClient(
@@ -255,6 +256,13 @@ class plexInfluxdbCollector():
 
                 session_id = self._get_session_id(stream)
 
+                if session_id in self.active_streams:
+                    start_time = self.active_streams[session_id]['start_time']
+                else:
+                    start_time = time.time()
+                    self.active_streams[session_id] = {}
+                    self.active_streams[session_id]['start_time'] = start_time
+
                 if stream.attrib['type'] == 'movie':
                     media_type = 'Movie'
                 elif stream.attrib['type'] == 'episode':
@@ -278,7 +286,8 @@ class plexInfluxdbCollector():
                 self.send_log('Title: {}'.format(full_title), 'debug')
                 self.send_log('Media Type: {}'.format(media_type), 'debug')
                 self.send_log('Session ID: {}'.format(session_id), 'debug')
-                self.send_log('Title: {}'.format(resolution), 'debug')
+                self.send_log('Resolution: {}'.format(resolution), 'debug')
+                self.send_log('Duration: {}'.format(str(time.time() - start_time)), 'debug')
 
                 """
                 playing_points = [
@@ -311,6 +320,7 @@ class plexInfluxdbCollector():
                             'user': stream.find('User').attrib['title'],
                             'resolution': resolution,
                             'media_type': media_type,
+                            'duration': time.time() - start_time
                         },
                         'tags': {
                             'host': host,
