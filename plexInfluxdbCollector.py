@@ -10,6 +10,7 @@ import configparser
 import logging
 import argparse
 import re
+from http.client import RemoteDisconnected
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
@@ -358,10 +359,12 @@ class plexInfluxdbCollector():
         :param current_streams: List of currently active streams from last API call
         :return:
         """
-
+        remove_keys = []
         for id, data in self.active_streams.items():
             if id not in current_streams:
-                self.active_streams.pop(id)
+                remove_keys.append(id)
+        for key in remove_keys:
+            self.active_streams.pop(key)
 
     def get_library_data(self):
         """
@@ -378,7 +381,7 @@ class plexInfluxdbCollector():
 
             try:
                 result = urlopen(req).read().decode('utf-8')
-            except URLError as e:
+            except (URLError, RemoteDisconnected) as e:
                 self.send_log('ERROR: Failed To Get Library Data From {}'.format(req_uri), 'error')
                 return
 
