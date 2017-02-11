@@ -530,11 +530,11 @@ class configManager():
         self.influx_ssl = self.config['INFLUXDB'].getboolean('SSL', fallback=False)
         self.influx_verify_ssl = self.config['INFLUXDB'].getboolean('Verify_SSL', fallback=True)
         self.influx_user = self.config['INFLUXDB'].get('Username', fallback='')
-        self.influx_password = self.config['INFLUXDB'].get('Password', fallback='')
+        self.influx_password = self.config['INFLUXDB'].get('Password', fallback='', raw=True)
 
         # Plex
         self.plex_user = self.config['PLEX']['Username']
-        self.plex_password = self.config['PLEX']['Password']
+        self.plex_password = self.config['PLEX'].get('Password', raw=True)
         servers = len(self.config['PLEX']['Servers'])
 
         #Logging
