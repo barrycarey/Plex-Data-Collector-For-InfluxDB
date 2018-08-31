@@ -14,10 +14,15 @@ from http.client import RemoteDisconnected
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
+from plexapi.server import PlexServer
 from requests.exceptions import ConnectionError
 
 
 #TODO Build word blacklist for logs.
+# TODO - Cleanup server URL handling
+# TODO - Add proper log filter instead of shim method
+from configmanager import configManager
+
 
 class plexInfluxdbCollector():
 
@@ -25,7 +30,8 @@ class plexInfluxdbCollector():
 
         self.config = configManager(silent, config=config)
 
-        self.servers = self.config.plex_servers
+        self.server_addresses = self.config.plex_server_addresses
+        self.plex_servers = []
         self.output = self.config.output
         self.token = None
         self.logger = None
@@ -44,6 +50,18 @@ class plexInfluxdbCollector():
         )
         self._set_logging()
         self._get_auth_token(self.config.plex_user, self.config.plex_password)
+        self._build_server_list()
+
+    def _build_server_list(self):
+        """
+        Build a list of plexapi objects from the servers provided in the config
+        :return:
+        """
+        for server in self.server_addresses:
+            base_url = 'http://{}:32400'.format(server)
+            api_conn = PlexServer(base_url, self.token)
+            # TODO - Connection exectpion
+            self.plex_servers.append(api_conn)
 
     def _set_logging(self):
         """
@@ -102,7 +120,7 @@ class plexInfluxdbCollector():
             msg = msg.replace(self.token, '********')
 
         # Remove server addresses
-        for server in self.servers:
+        for server in self.server_addresses:
             msg = msg.replace(server, '*******')
 
         # Remove IP addresses
@@ -175,6 +193,16 @@ class plexInfluxdbCollector():
 
         return req
 
+    def get_active_streams_new(self):
+
+        self.send_log('Attempting to get active sessions', 'info')
+        active_streams = {}
+        for server in self.plex_servers:
+            active_sessions = server.sessions()
+            active_streams[server._baseurl] = active_sessions
+
+        self._process_active_streams(active_streams)
+
     def get_active_streams(self):
         """
         Processes the Plex session list
@@ -183,7 +211,7 @@ class plexInfluxdbCollector():
         self.send_log('Getting active streams', 'debug')
         active_streams = {}
 
-        for server in self.servers:
+        for server in self.plex_servers:
             req_uri = 'http://{}:32400/status/sessions'.format(server)
 
             self.send_log('Attempting to get all libraries with URL: {}'.format(req_uri), 'info')
@@ -259,7 +287,11 @@ class plexInfluxdbCollector():
             for stream in streams:
 
                 session_id = self._get_session_id(stream)
+                session_id = stream.sessionKey
                 session_ids.append(session_id)
+
+                player = stream.players[0]
+                user = stream.usernames[0]
 
                 if session_id in self.active_streams:
                     start_time = self.active_streams[session_id]['start_time']
@@ -268,25 +300,26 @@ class plexInfluxdbCollector():
                     self.active_streams[session_id] = {}
                     self.active_streams[session_id]['start_time'] = start_time
 
-                if stream.attrib['type'] == 'movie':
+                if stream.type == 'movie':
                     media_type = 'Movie'
-                elif stream.attrib['type'] == 'episode':
+                elif stream.type == 'episode':
                     media_type = 'TV Show'
-                elif stream.attrib['type'] == 'track':
+                elif stream.type == 'track':
                     media_type = 'Music'
                 else:
                     media_type = 'Unknown'
 
                 # Build the title. TV and Music Have a root title plus episode/track name.  Movies don't
-                if 'grandparentTitle' in stream.attrib:
-                    full_title = stream.attrib['grandparentTitle'] + ' - ' + stream.attrib['title']
+                if hasattr(stream, 'grandparentTitle'):
+                    full_title = stream.grandparentTitle + ' - ' + stream.title
                 else:
-                    full_title = stream.attrib['title']
+                    full_title = stream.title
 
                 if media_type != 'Music':
-                    resolution = stream.find('Media').attrib['videoResolution'] + 'p'
+                    resolution = stream.media[0].videoResolution + 'p'
                 else:
-                    resolution = stream.find('Media').attrib['bitrate'] + 'Kbps'
+                    resolution = stream.media[0].bitrate + 'Kbps'
+
 
                 self.send_log('Title: {}'.format(full_title), 'debug')
                 self.send_log('Media Type: {}'.format(media_type), 'debug')
@@ -294,42 +327,21 @@ class plexInfluxdbCollector():
                 self.send_log('Resolution: {}'.format(resolution), 'debug')
                 self.send_log('Duration: {}'.format(str(time.time() - start_time)), 'debug')
 
-                """
-                playing_points = [
-                    {
-                        'measurement': 'now_playing',
-                        'fields': {
-                            'session_id': session_id
-                         },
-                        'tags': {
-                            'host': host,
-                            'player_address': stream.find('Player').attrib['address'],
-
-                            'media_type': media_type,
-                            'resolution': resolution,
-                            'user': stream.find('User').attrib['title'],
-                            'stream_title': full_title,
-                            'player': stream.find('Player').attrib['title'],
-                        }
-                    }
-                ]
-
-                # Working Layout
-                """
                 playing_points = [
                     {
                         'measurement': 'now_playing',
                         'fields': {
                             'stream_title': full_title,
-                            'player': stream.find('Player').attrib['title'],
-                            'user': stream.find('User').attrib['title'],
+                            'player': player.title,
+                            'state': player.state,
+                            'user': user[0],
                             'resolution': resolution,
                             'media_type': media_type,
                             'duration': time.time() - start_time
                         },
                         'tags': {
                             'host': host,
-                            'player_address': stream.find('Player').attrib['address'],
+                            #'player_address': stream.find('Player').attrib['address'],
                             'session_id': session_id
                         }
                     }
@@ -365,6 +377,37 @@ class plexInfluxdbCollector():
                 remove_keys.append(id)
         for key in remove_keys:
             self.active_streams.pop(key)
+
+    def get_library_data_new(self):
+
+        lib_data = {}
+
+        for server in self.plex_servers:
+            libs = server.library.sections()
+            self.send_log('We found {} libraries for server {}'.format(str(len(libs)), server), 'info')
+            host_libs = []
+            for lib in libs:
+                host_lib = {
+                    'name': lib.title,
+                    'items': len(lib.search())
+                }
+
+                if lib.title == 'TV Shows':
+                    seasons = 0
+                    episodes = 0
+                    shows = lib.search()
+                    for show in shows:
+                        seasons += len(show.seasons())
+                        episodes += len(show.episodes())
+                    host_lib['episodes'] = episodes
+                    host_lib['seasons'] = seasons
+
+                host_libs.append(host_lib)
+
+            # TODO - Redo how we name servers
+            lib_data[server._baseurl] = host_libs
+
+        self._process_library_data(lib_data)
 
     def get_library_data(self):
         """
@@ -479,120 +522,12 @@ class plexInfluxdbCollector():
         self.send_log('Starting Monitoring Loop', 'info')
 
         while True:
-            self.get_library_data()
-            self.get_active_streams()
+            self.get_library_data_new()
+            self.get_active_streams_new()
             time.sleep(self.delay)
 
 
-class configManager():
 
-    def __init__(self, silent, config):
-
-        self.valid_log_levels = {
-            'DEBUG': 0,
-            'INFO': 1,
-            'WARNING': 2,
-            'ERROR': 3,
-            'CRITICAL': 4
-        }
-        self.silent = silent
-
-        if not self.silent:
-            print('Loading Configuration File {}'.format(config))
-
-        config_file = os.path.join(os.getcwd(), config)
-        if os.path.isfile(config_file):
-            self.config = configparser.ConfigParser()
-            self.config.read(config_file)
-        else:
-            print('ERROR: Unable To Load Config File: {}'.format(config_file))
-            sys.exit(1)
-
-        self._load_config_values()
-        self._validate_plex_servers()
-        self._validate_logging_level()
-        if not self.silent:
-            print('Configuration Successfully Loaded')
-
-    def _load_config_values(self):
-
-        # General
-        self.delay = self.config['GENERAL'].getint('Delay', fallback=2)
-        if not self.silent:
-            self.output = self.config['GENERAL'].getboolean('Output', fallback=True)
-        else:
-            self.output = None
-
-        # InfluxDB
-        self.influx_address = self.config['INFLUXDB']['Address']
-        self.influx_port = self.config['INFLUXDB'].getint('Port', fallback=8086)
-        self.influx_database = self.config['INFLUXDB'].get('Database', fallback='plex_data')
-        self.influx_ssl = self.config['INFLUXDB'].getboolean('SSL', fallback=False)
-        self.influx_verify_ssl = self.config['INFLUXDB'].getboolean('Verify_SSL', fallback=True)
-        self.influx_user = self.config['INFLUXDB'].get('Username', fallback='')
-        self.influx_password = self.config['INFLUXDB'].get('Password', fallback='', raw=True)
-
-        # Plex
-        self.plex_user = self.config['PLEX']['Username']
-        self.plex_password = self.config['PLEX'].get('Password', raw=True)
-        servers = len(self.config['PLEX']['Servers'])
-
-        #Logging
-        self.logging = self.config['LOGGING'].getboolean('Enable', fallback=False)
-        self.logging_level = self.config['LOGGING']['Level'].upper()
-        self.logging_file = self.config['LOGGING']['LogFile']
-        self.logging_censor = self.config['LOGGING'].getboolean('CensorLogs', fallback=True)
-        self.logging_print_threshold = self.config['LOGGING'].getint('PrintThreshold', fallback=2)
-
-        if servers:
-            self.plex_servers = self.config['PLEX']['Servers'].replace(' ', '').split(',')
-        else:
-            print('ERROR: No Plex Servers Provided.  Aborting')
-            sys.exit(1)
-
-    def _validate_plex_servers(self):
-        """
-        Make sure the servers provided in the config can be resolved.  Abort if they can't
-        :return:
-        """
-        failed_servers = []
-        for server in self.plex_servers:
-            server_url = 'http://{}:32400'.format(server)
-            try:
-                urlopen(server_url)
-            except URLError as e:
-                # If it's 401 it's a valid server but we're not authorized yet
-                if hasattr(e, 'code') and e.code == 401:
-                    continue
-                if not self.silent:
-                    print('ERROR: Failed To Connect To Plex Server At: ' + server_url)
-                failed_servers.append(server)
-
-        # Do we have any valid servers left?
-        # TODO This check is failing even with no bad servers
-        if len(self.plex_servers) != len(failed_servers):
-            if not self.silent:
-                print('INFO: Found {} Bad Server(s).  Removing Them From List'.format(str(len(failed_servers))))
-            for server in failed_servers:
-                self.plex_servers.remove(server)
-        else:
-            print('ERROR: No Valid Servers Provided.  Check Server Addresses And Try Again')
-            sys.exit(1)
-
-    def _validate_logging_level(self):
-        """
-        Make sure we get a valid logging level
-        :return:
-        """
-
-        if self.logging_level in self.valid_log_levels:
-            self.logging_level = self.logging_level.upper()
-            return
-        else:
-            if not self.silent:
-                print('Invalid logging level provided. {}'.format(self.logging_level))
-                print('Logging will be disabled')
-            self.logging = None
 
 
 def main():
