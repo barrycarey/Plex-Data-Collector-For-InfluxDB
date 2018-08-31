@@ -8,39 +8,45 @@ from urllib.request import Request, urlopen
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from plexapi.server import PlexServer
-from requests.exceptions import ConnectionError
 
-# TODO Build word blacklist for logs.
-# TODO - Cleanup server URL handling
-# TODO - Add proper log filter instead of shim method
-# TODO - Redo package structure
 from plexcollector.config import config, log
 
 
 class PlexInfluxdbCollector:
 
-    def __init__(self):
+    def __init__(self, single_run=False):
 
         self.server_addresses = config.plex_server_addresses
         self.plex_servers = []
         self.logger = log
         self.token = None
+        self.single_run = single_run
         self.active_streams = {}  # Store active streams so we can track duration
         self.delay = config.delay
-        # TODO - Move to method that validates connection
-        self.influx_client = InfluxDBClient(
-            config.influx_address,
-            config.influx_port,
-            database=config.influx_database,
-            ssl=config.influx_ssl,
-            verify_ssl=config.influx_verify_ssl,
-            username=config.influx_user,
-            password=config.influx_password
+        self.influx_client = self._get_influx_connection()
 
-        )
-
-        self._get_auth_token(config.plex_user, config.plex_password)
         self._build_server_list()
+
+    def _get_influx_connection(self):
+        influx = InfluxDBClient(
+                    config.influx_address,
+                    config.influx_port,
+                    database=config.influx_database,
+                    ssl=config.influx_ssl,
+                    verify_ssl=config.influx_verify_ssl,
+                    username=config.influx_user,
+                    password=config.influx_password,
+                    timeout=5
+                )
+        try:
+            log.debug('Testing connection to InfluxDb using provided credentials')
+            influx.get_list_users()
+            log.debug('Successful connection to InfluxDb')
+        except ConnectionError:
+            log.critical('Unable to connect to InfluxDB Server.  Aborting')
+            sys.exit(1)
+
+        return influx
 
     def _build_server_list(self):
         """
@@ -49,11 +55,11 @@ class PlexInfluxdbCollector:
         """
         for server in self.server_addresses:
             base_url = 'http://{}:32400'.format(server)
-            api_conn = PlexServer(base_url, self.token)
+            api_conn = PlexServer(base_url, self.get_auth_token(config.plex_user, config.plex_password))
             # TODO - Connection exectpion
             self.plex_servers.append(api_conn)
 
-    def _get_auth_token(self, username, password):
+    def get_auth_token(self, username, password):
         """
         Make a reqest to plex.tv to get an authentication token for future requests
         :param username: Plex Username
@@ -85,7 +91,7 @@ class PlexInfluxdbCollector:
 
         # Make sure we actually got a token back
         if 'authToken' in output['user']:
-            self.token = output['user']['authToken']
+            return output['user']['authToken']
         else:
             print('Something Broke \n We got a valid response but for some reason there\'s no auth token')
             sys.exit(1)
@@ -126,29 +132,6 @@ class PlexInfluxdbCollector:
 
         self._process_active_streams(active_streams)
 
-    def _get_session_id(self, stream):
-        """
-        Find a unique key to identify the stream.  In most cases it will be the sessionKey.  If this does not exist,
-        fall back to the TranscodeSession key.
-        :param stream: XML object of the stream
-        :return:
-        """
-
-        if hasattr(stream, 'sessionKey'):
-            return stream.sessionKey
-
-        session = stream.find('Session')
-
-        if session:
-            return session.attrib['id']
-
-        transcodeSession = stream.find('TranscodeSession')
-
-        if transcodeSession:
-            return transcodeSession.attrib['id']
-
-        return 'N/A'
-
     def _process_active_streams(self, stream_data):
         """
         Take an object of stream data and create Influx JSON data
@@ -181,12 +164,12 @@ class PlexInfluxdbCollector:
             self.write_influx_data(total_stream_points)
 
             for stream in streams:
-
-                session_id = self._get_session_id(stream)
-                session_ids.append(session_id)
-
                 player = stream.players[0]
                 user = stream.usernames[0]
+                session_id = stream.session[0].id
+                transcode = stream.transcodeSessions if stream.transcodeSessions else None
+                session_ids.append(session_id)
+
 
                 if session_id in self.active_streams:
                     start_time = self.active_streams[session_id]['start_time']
@@ -213,8 +196,7 @@ class PlexInfluxdbCollector:
                 if media_type != 'Music':
                     resolution = stream.media[0].videoResolution
                 else:
-                    resolution = stream.media[0].bitrate + 'Kbps'
-
+                    resolution = str(stream.media[0].bitrate) + 'Kbps'
 
                 log.debug('Title: {}'.format(full_title))
                 log.debug('Media Type: {}'.format(media_type))
@@ -232,7 +214,8 @@ class PlexInfluxdbCollector:
                             'user': user,
                             'resolution': resolution,
                             'media_type': media_type,
-                            'duration': time.time() - start_time
+                            'playback': 'transcode' if transcode else 'direct',
+                            'duration': time.time() - start_time,
                         },
                         'tags': {
                             'host': host,
@@ -282,16 +265,19 @@ class PlexInfluxdbCollector:
             log.info('We found {} libraries for server {}'.format(str(len(libs)), server))
             host_libs = []
             for lib in libs:
+                log.info('Adding data for library %s', lib.title)
                 host_lib = {
                     'name': lib.title,
                     'items': len(lib.search())
                 }
 
                 if lib.title == 'TV Shows':
+                    log.info('Processing TV Shows.  This can take awhile for large libraries')
                     seasons = 0
                     episodes = 0
                     shows = lib.search()
                     for show in shows:
+                        log.debug('Checking TV Show: %s', show.title)
                         seasons += len(show.seasons())
                         episodes += len(show.episodes())
                     host_lib['episodes'] = episodes
@@ -343,15 +329,10 @@ class PlexInfluxdbCollector:
             self.influx_client.write_points(json_data)
         except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
             if hasattr(e, 'code') and e.code == 404:
-
                 log.error('Database {} Does Not Exist.  Attempting To Create')
-
-                # TODO Grab exception here
                 self.influx_client.create_database(config.influx_database)
                 self.influx_client.write_points(json_data)
-
                 return
-
             log.error('Failed to write data to InfluxDB')
 
         log.debug('Written To Influx: {}'.format(json_data))
@@ -363,6 +344,8 @@ class PlexInfluxdbCollector:
             self.get_library_data()
             self.get_active_streams()
             time.sleep(self.delay)
+            if self.single_run:
+                return
 
 
 

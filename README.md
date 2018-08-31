@@ -11,6 +11,7 @@ This is a tool for collecting some basic info about your Plex server and sending
 |Key            |Description                                                                                                         |
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
 |Delay          |Delay between updating metrics                                                                                      |
+|ReportCombined |When using multiple servers report total streams over all servers                                                   |
 |Output         |Write console output while tool is running                                                                          |
 #### INFLUXDB
 |Key            |Description                                                                                                         |
@@ -29,18 +30,12 @@ This is a tool for collecting some basic info about your Plex server and sending
 #### LOGGING
 |Key            |Description                                                                                                         |
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
-|Enable         |Output logging messages to provided log file                                                                        |
 |Level          |Minimum type of message to log.  Valid options are: critical, error, warning, info, debug                           |
-|LogFile        |File to log messages to.  Can be relative or absolute path                                                          |
-|CensorLogs     |Censor certain things like server names and IP addresses from logs                                                  |
 
 
 **Usage**
 
 Enter your desired information in config.ini and run plexInfluxdbCollector.py
-
-Optionally, you can specify the --config argument to load the config file from a different location.  
-
 
 ***Requirements***
 

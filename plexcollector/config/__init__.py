@@ -14,7 +14,7 @@ config = ConfigManager(config)
 
 log = logging.getLogger(__name__)
 log.setLevel(config.logging_level)
-formatter = logging.Formatter('%(levelname)s:%(module)s:%(funcName)s:%(lineno)d: %(message)s')
+formatter = logging.Formatter('%(asctime)s%(levelname)s:%(module)s:%(funcName)s:%(lineno)d: %(message)s')
 
 general_handler = logging.StreamHandler(sys.stdout)
 general_filter = SingleLevelFilter(logging.INFO, False)

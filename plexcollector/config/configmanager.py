@@ -66,13 +66,11 @@ class ConfigManager:
                 # If it's 401 it's a valid server but we're not authorized yet
                 if hasattr(e, 'code') and e.code == 401:
                     continue
-                if not self.silent:
-                    print('ERROR: Failed To Connect To Plex Server At: ' + server_url)
                 failed_servers.append(server)
 
         # Do we have any valid servers left?
         # TODO This check is failing even with no bad servers
-        if len(self.plex_server_addresses) != len(failed_servers):
+        if len(self.plex_server_addresses) > len(failed_servers):
             print('INFO: Found {} Bad Server(s).  Removing Them From List'.format(str(len(failed_servers))))
             for server in failed_servers:
                 self.plex_server_addresses.remove(server)
