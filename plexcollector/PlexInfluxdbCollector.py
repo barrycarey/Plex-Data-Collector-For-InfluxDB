@@ -1,55 +1,45 @@
-from urllib.request import Request, urlopen
 import base64
 import json
-import os
 import sys
-import xml.etree.ElementTree as ET
 import time
-from urllib.error import HTTPError, URLError
-import configparser
-import logging
-import argparse
-import re
-from http.client import RemoteDisconnected
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from plexapi.server import PlexServer
 from requests.exceptions import ConnectionError
 
-
-#TODO Build word blacklist for logs.
+# TODO Build word blacklist for logs.
 # TODO - Cleanup server URL handling
 # TODO - Add proper log filter instead of shim method
-from configmanager import configManager
+# TODO - Redo package structure
+from plexcollector.config import config, log
 
 
-class plexInfluxdbCollector():
+class PlexInfluxdbCollector:
 
-    def __init__(self, silent, config=None):
+    def __init__(self):
 
-        self.config = configManager(silent, config=config)
-
-        self.server_addresses = self.config.plex_server_addresses
+        self.server_addresses = config.plex_server_addresses
         self.plex_servers = []
-        self.output = self.config.output
+        self.logger = log
         self.token = None
-        self.logger = None
         self.active_streams = {}  # Store active streams so we can track duration
-        self._report_combined_streams = True # TODO Move to config
-        self.delay = self.config.delay
+        self.delay = config.delay
+        # TODO - Move to method that validates connection
         self.influx_client = InfluxDBClient(
-            self.config.influx_address,
-            self.config.influx_port,
-            database=self.config.influx_database,
-            ssl=self.config.influx_ssl,
-            verify_ssl=self.config.influx_verify_ssl,
-            username=self.config.influx_user,
-            password=self.config.influx_password
+            config.influx_address,
+            config.influx_port,
+            database=config.influx_database,
+            ssl=config.influx_ssl,
+            verify_ssl=config.influx_verify_ssl,
+            username=config.influx_user,
+            password=config.influx_password
 
         )
-        self._set_logging()
-        self._get_auth_token(self.config.plex_user, self.config.plex_password)
+
+        self._get_auth_token(config.plex_user, config.plex_password)
         self._build_server_list()
 
     def _build_server_list(self):
@@ -63,72 +53,6 @@ class plexInfluxdbCollector():
             # TODO - Connection exectpion
             self.plex_servers.append(api_conn)
 
-    def _set_logging(self):
-        """
-        Create the logger object if enabled in the config
-        :return: None
-        """
-
-        if self.config.logging:
-            if self.output:
-                print('Logging is enabled.  Log output will be sent to {}'.format(self.config.logging_file))
-            self.logger = logging.getLogger(__name__)
-            self.logger.setLevel(self.config.logging_level)
-            formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-            fhandle = logging.FileHandler(self.config.logging_file)
-            fhandle.setFormatter(formatter)
-            self.logger.addHandler(fhandle)
-
-    def send_log(self, msg, level):
-        """
-        Used as a shim to write log messages.  Allows us to sanitize input before logging
-        :param msg: Message to log
-        :param level: Level to log message at
-        :return: None
-        """
-
-        if not self.logger:
-            return
-
-        if self.output and self.config.valid_log_levels[level.upper()] >= self.config.logging_print_threshold:
-            print(msg)
-
-        # Make sure a good level was given
-        if not hasattr(self.logger, level):
-            self.logger.error('Invalid log level provided to send_log')
-            return
-
-        output = self._sanitize_log_message(msg)
-
-        log_method = getattr(self.logger, level)
-        log_method(output)
-
-    def _sanitize_log_message(self, msg):
-        """
-        Take the incoming log message and clean and sensitive data out
-        :param msg: incoming message string
-        :return: cleaned message string
-        """
-
-        msg = str(msg)
-
-        if not self.config.logging_censor:
-            return msg
-
-        msg = msg.replace(self.config.plex_user, '********')
-        if self.token:
-            msg = msg.replace(self.token, '********')
-
-        # Remove server addresses
-        for server in self.server_addresses:
-            msg = msg.replace(server, '*******')
-
-        # Remove IP addresses
-        for match in re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", msg):
-            msg = msg.replace(match, '***.***.***.***')
-
-        return msg
-
     def _get_auth_token(self, username, password):
         """
         Make a reqest to plex.tv to get an authentication token for future requests
@@ -137,7 +61,7 @@ class plexInfluxdbCollector():
         :return:
         """
 
-        self.send_log('Getting Auth Token For User {}'.format(username), 'info')
+        log.info('Getting Auth Token For User {}'.format(username))
 
         auth_string = '{}:{}'.format(username, password)
         base_auth = base64.encodebytes(bytes(auth_string, 'utf-8'))
@@ -150,12 +74,11 @@ class plexInfluxdbCollector():
         except HTTPError as e:
             print('Failed To Get Authentication Token')
             if e.code == 401:
-                print('This is likely due to a bad username or password')
-                self.send_log('Failed to get token due to bad username/password', 'error')
+                log.error('Failed to get token due to bad username/password')
             else:
                 print('Maybe this will help:')
                 print(e)
-                self.send_log('Failed to get authentication token.  No idea why', 'error')
+                log.error('Failed to get authentication token.  No idea why')
             sys.exit(1)
 
         output = json.loads(result.decode('utf-8'))
@@ -167,7 +90,7 @@ class plexInfluxdbCollector():
             print('Something Broke \n We got a valid response but for some reason there\'s no auth token')
             sys.exit(1)
 
-        self.send_log('Successfully Retrieved Auth Token Of: {}'.format(self.token), 'info')
+        log.info('Successfully Retrieved Auth Token Of: {}'.format(self.token))
 
     def _set_default_headers(self, req):
         """
@@ -176,7 +99,7 @@ class plexInfluxdbCollector():
         :return:
         """
 
-        self.send_log('Adding Request Headers', 'debug')
+        log.debug('Adding Request Headers')
 
         headers = {
             'X-Plex-Client-Identifier': 'Plex InfluxDB Collector',
@@ -195,7 +118,7 @@ class plexInfluxdbCollector():
 
     def get_active_streams(self):
 
-        self.send_log('Attempting to get active sessions', 'info')
+        log.info('Attempting to get active sessions')
         active_streams = {}
         for server in self.plex_servers:
             active_sessions = server.sessions()
@@ -233,7 +156,7 @@ class plexInfluxdbCollector():
         :return:
         """
 
-        self.send_log('Processing Active Streams', 'info')
+        log.info('Processing Active Streams')
 
         combined_streams = 0
         session_ids = []  # Active Session IDs for this run
@@ -260,7 +183,6 @@ class plexInfluxdbCollector():
             for stream in streams:
 
                 session_id = self._get_session_id(stream)
-                #session_id = stream.sessionKey
                 session_ids.append(session_id)
 
                 player = stream.players[0]
@@ -294,11 +216,11 @@ class plexInfluxdbCollector():
                     resolution = stream.media[0].bitrate + 'Kbps'
 
 
-                self.send_log('Title: {}'.format(full_title), 'debug')
-                self.send_log('Media Type: {}'.format(media_type), 'debug')
-                self.send_log('Session ID: {}'.format(session_id), 'debug')
-                self.send_log('Resolution: {}'.format(resolution), 'debug')
-                self.send_log('Duration: {}'.format(str(time.time() - start_time)), 'debug')
+                log.debug('Title: {}'.format(full_title))
+                log.debug('Media Type: {}'.format(media_type))
+                log.debug('Session ID: {}'.format(session_id))
+                log.debug('Resolution: {}'.format(resolution))
+                log.debug('Duration: {}'.format(str(time.time() - start_time)))
 
                 playing_points = [
                     {
@@ -322,7 +244,7 @@ class plexInfluxdbCollector():
 
                 self.write_influx_data(playing_points)
 
-        if self._report_combined_streams:
+        if config.report_combined:
             combined_stream_points = [
                 {
                     'measurement': 'active_streams',
@@ -351,13 +273,13 @@ class plexInfluxdbCollector():
         for key in remove_keys:
             self.active_streams.pop(key)
 
-    def get_library_data_new(self):
+    def get_library_data(self):
 
         lib_data = {}
 
         for server in self.plex_servers:
             libs = server.library.sections()
-            self.send_log('We found {} libraries for server {}'.format(str(len(libs)), server), 'info')
+            log.info('We found {} libraries for server {}'.format(str(len(libs)), server))
             host_libs = []
             for lib in libs:
                 host_lib = {
@@ -377,7 +299,7 @@ class plexInfluxdbCollector():
 
                 host_libs.append(host_lib)
 
-            # TODO - Redo how we name servers
+            # TODO - Redo how we name servers so we don't have to access private var
             lib_data[server._baseurl] = host_libs
 
         self._process_library_data(lib_data)
@@ -387,7 +309,7 @@ class plexInfluxdbCollector():
         Breakdown the provided library data and format for InfluxDB
         """
 
-        self.send_log('Processing Library Data', 'info')
+        log.info('Processing Library Data')
 
         for host, data in lib_data.items():
             for lib in data:
@@ -415,31 +337,30 @@ class plexInfluxdbCollector():
         :param json_data:
         :return:
         """
-        self.send_log(json_data, 'debug')
+        log.debug(json_data)
 
         try:
             self.influx_client.write_points(json_data)
         except (InfluxDBClientError, ConnectionError, InfluxDBServerError) as e:
             if hasattr(e, 'code') and e.code == 404:
 
-                self.send_log('Database {} Does Not Exist.  Attempting To Create', 'error')
+                log.error('Database {} Does Not Exist.  Attempting To Create')
 
                 # TODO Grab exception here
-                self.influx_client.create_database(self.config.influx_database)
+                self.influx_client.create_database(config.influx_database)
                 self.influx_client.write_points(json_data)
 
                 return
 
-            self.send_log('Failed to write data to InfluxDB', 'error')
+            log.error('Failed to write data to InfluxDB')
 
-        self.send_log('Written To Influx: {}'.format(json_data), 'debug')
+        log.debug('Written To Influx: {}'.format(json_data))
 
     def run(self):
 
-        self.send_log('Starting Monitoring Loop', 'info')
-
+        log.info('Starting Monitoring Loop')
         while True:
-            self.get_library_data_new()
+            self.get_library_data()
             self.get_active_streams()
             time.sleep(self.delay)
 
@@ -447,15 +368,3 @@ class plexInfluxdbCollector():
 
 
 
-def main():
-
-    parser = argparse.ArgumentParser(description="A tool to send Plex statistics to InfluxDB")
-    parser.add_argument('--config', default='config.ini', dest='config', help='Specify a custom location for the config file')
-    parser.add_argument('--silent', action='store_true', help='Surpress All Output, regardless of config settings')
-    args = parser.parse_args()
-    collector = plexInfluxdbCollector(args.silent, config=args.config)
-    collector.run()
-
-
-if __name__ == '__main__':
-    main()
