@@ -193,41 +193,13 @@ class plexInfluxdbCollector():
 
         return req
 
-    def get_active_streams_new(self):
+    def get_active_streams(self):
 
         self.send_log('Attempting to get active sessions', 'info')
         active_streams = {}
         for server in self.plex_servers:
             active_sessions = server.sessions()
             active_streams[server._baseurl] = active_sessions
-
-        self._process_active_streams(active_streams)
-
-    def get_active_streams(self):
-        """
-        Processes the Plex session list
-        :return:
-        """
-        self.send_log('Getting active streams', 'debug')
-        active_streams = {}
-
-        for server in self.plex_servers:
-            req_uri = 'http://{}:32400/status/sessions'.format(server)
-
-            self.send_log('Attempting to get all libraries with URL: {}'.format(req_uri), 'info')
-
-            req = Request(req_uri)
-            self._set_default_headers(req)
-
-            try:
-                result = urlopen(req).read().decode('utf-8')
-            except URLError as e:
-                self.send_log('Failed To Get Current Sessions', 'error')
-                return
-
-            streams = ET.fromstring(result)
-
-            active_streams[server] = streams
 
         self._process_active_streams(active_streams)
 
@@ -238,10 +210,11 @@ class plexInfluxdbCollector():
         :param stream: XML object of the stream
         :return:
         """
-        session = stream.find('Session')
 
-        if 'sessionKey' in stream.attrib:
-            return stream.attrib['sessionKey']
+        if hasattr(stream, 'sessionKey'):
+            return stream.sessionKey
+
+        session = stream.find('Session')
 
         if session:
             return session.attrib['id']
@@ -287,7 +260,7 @@ class plexInfluxdbCollector():
             for stream in streams:
 
                 session_id = self._get_session_id(stream)
-                session_id = stream.sessionKey
+                #session_id = stream.sessionKey
                 session_ids.append(session_id)
 
                 player = stream.players[0]
@@ -316,7 +289,7 @@ class plexInfluxdbCollector():
                     full_title = stream.title
 
                 if media_type != 'Music':
-                    resolution = stream.media[0].videoResolution + 'p'
+                    resolution = stream.media[0].videoResolution
                 else:
                     resolution = stream.media[0].bitrate + 'Kbps'
 
@@ -334,14 +307,14 @@ class plexInfluxdbCollector():
                             'stream_title': full_title,
                             'player': player.title,
                             'state': player.state,
-                            'user': user[0],
+                            'user': user,
                             'resolution': resolution,
                             'media_type': media_type,
                             'duration': time.time() - start_time
                         },
                         'tags': {
                             'host': host,
-                            #'player_address': stream.find('Player').attrib['address'],
+                            'player_address': player.address,
                             'session_id': session_id
                         }
                     }
@@ -409,62 +382,6 @@ class plexInfluxdbCollector():
 
         self._process_library_data(lib_data)
 
-    def get_library_data(self):
-        """
-        Get all library data for each provided server.
-        """
-        # TODO This might take ages in large libraries.  Add a seperate delay for this check
-        lib_data = {}
-
-        for server in self.servers:
-            req_uri = 'http://{}:32400/library/sections'.format(server)
-            self.send_log('Attempting to get all libraries with URL: {}'.format(req_uri), 'info')
-            req = Request(req_uri)
-            req = self._set_default_headers(req)
-
-            try:
-                result = urlopen(req).read().decode('utf-8')
-            except (URLError, RemoteDisconnected) as e:
-                self.send_log('ERROR: Failed To Get Library Data From {}'.format(req_uri), 'error')
-                return
-
-            libs = ET.fromstring(result)
-
-            self.send_log('We found {} libraries for server {}'.format(str(len(libs)), server), 'info')
-
-            host_libs = []
-            if len(libs) > 0:
-                lib_keys = [lib.attrib['key'] for lib in libs]  # TODO probably should catch exception here
-                self.send_log('Scanning libraries on server {} with keys {}'.format(server, ','.join(lib_keys)), 'info')
-
-                for key in lib_keys:
-                    req_uri = 'http://{}:32400/library/sections/{}/all'.format(server, key)
-                    self.send_log('Attempting to get library {} with URL: {}'.format(key, req_uri), 'info')
-                    req = Request(req_uri)
-                    req = self._set_default_headers(req)
-
-                    try:
-                        result = urlopen(req).read().decode('utf-8')
-                    except URLError as e:
-                        self.send_log('Failed to get library {}.  {}'.format(key, e), 'error')
-                        continue
-
-                    lib_root = ET.fromstring(result)
-                    host_lib = {
-                        'name': lib_root.attrib['librarySectionTitle'],
-                        'items': len(lib_root)
-                    }
-                    if lib_root.attrib['librarySectionTitle'] == "TV Shows":
-                        host_lib['episodes'] = 0
-                        host_lib['seasons'] = 0
-                        for show in lib_root:
-                            host_lib['episodes'] += int(show.attrib['leafCount'])
-                            host_lib['seasons'] += int(show.attrib['childCount'])
-                    host_libs.append(host_lib)
-                lib_data[server] = host_libs
-
-        self._process_library_data(lib_data)
-
     def _process_library_data(self, lib_data):
         """
         Breakdown the provided library data and format for InfluxDB
@@ -523,7 +440,7 @@ class plexInfluxdbCollector():
 
         while True:
             self.get_library_data_new()
-            self.get_active_streams_new()
+            self.get_active_streams()
             time.sleep(self.delay)
 
 
