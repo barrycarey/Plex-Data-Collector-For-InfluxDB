@@ -5,6 +5,10 @@
 
 This is a tool for collecting some basic info about your Plex server and sending it to InfluxDB.  This is ideal for displaying Plex specific information in a tool such as Grafana. 
 
+**Usage**
+
+Enter your desired information in config.ini and run plexcollector.py
+
 ## Configuration within config.ini
 
 #### GENERAL
@@ -32,10 +36,6 @@ This is a tool for collecting some basic info about your Plex server and sending
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
 |Level          |Minimum type of message to log.  Valid options are: critical, error, warning, info, debug                           |
 
-
-**Usage**
-
-Enter your desired information in config.ini and run plexInfluxdbCollector.py
 
 ***Requirements***
 
