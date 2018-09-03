@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from plexapi.server import PlexServer
+from requests import ConnectTimeout
 
 from plexcollector.config import config, log
 
@@ -27,27 +28,6 @@ class PlexInfluxdbCollector:
 
         self._build_server_list()
 
-    def _get_influx_connection(self):
-        influx = InfluxDBClient(
-                    config.influx_address,
-                    config.influx_port,
-                    database=config.influx_database,
-                    ssl=config.influx_ssl,
-                    verify_ssl=config.influx_verify_ssl,
-                    username=config.influx_user,
-                    password=config.influx_password,
-                    timeout=5
-                )
-        try:
-            log.debug('Testing connection to InfluxDb using provided credentials')
-            influx.get_list_users()
-            log.debug('Successful connection to InfluxDb')
-        except ConnectionError:
-            log.critical('Unable to connect to InfluxDB Server.  Aborting')
-            sys.exit(1)
-
-        return influx
-
     def _build_server_list(self):
         """
         Build a list of plexapi objects from the servers provided in the config
@@ -56,8 +36,39 @@ class PlexInfluxdbCollector:
         for server in self.server_addresses:
             base_url = 'http://{}:32400'.format(server)
             api_conn = PlexServer(base_url, self.get_auth_token(config.plex_user, config.plex_password))
-            # TODO - Connection exectpion
             self.plex_servers.append(api_conn)
+
+    def _get_influx_connection(self):
+        """
+        Create an InfluxDB connection and test to make sure it works.
+        We test with the get all users command.  If the address is bad it fails
+        with a 404.  If the user doesn't have permission it fails with 401
+        :return:
+        """
+        # TODO - Check what permissions are actually needed to make this work
+        influx = InfluxDBClient(
+            config.influx_address,
+            config.influx_port,
+            database=config.influx_database,
+            ssl=config.influx_ssl,
+            verify_ssl=config.influx_verify_ssl,
+            username=config.influx_user,
+            password=config.influx_password,
+            timeout=5
+        )
+        try:
+            log.debug('Testing connection to InfluxDb using provided credentials')
+            influx.get_list_users() # TODO - Find better way to test connection and permissions
+            log.debug('Successful connection to InfluxDb')
+        except (ConnectTimeout, InfluxDBClientError) as e:
+            if isinstance(e, ConnectTimeout):
+                log.critical('Unable to connect to InfluxDB at the provided address (%s)', config.influx_address)
+            elif e.code == 401:
+                log.critical('Unable to connect to InfluxDB with provided credentials')
+
+            sys.exit(1)
+
+        return influx
 
     def get_auth_token(self, username, password):
         """
@@ -91,12 +102,13 @@ class PlexInfluxdbCollector:
 
         # Make sure we actually got a token back
         if 'authToken' in output['user']:
+            log.debug('Successfully Retrieved Auth Token Of: {}'.format(self.token))
             return output['user']['authToken']
         else:
             print('Something Broke \n We got a valid response but for some reason there\'s no auth token')
             sys.exit(1)
 
-        log.info('Successfully Retrieved Auth Token Of: {}'.format(self.token))
+
 
     def _set_default_headers(self, req):
         """
@@ -169,7 +181,6 @@ class PlexInfluxdbCollector:
                 session_id = stream.session[0].id
                 transcode = stream.transcodeSessions if stream.transcodeSessions else None
                 session_ids.append(session_id)
-
 
                 if session_id in self.active_streams:
                     start_time = self.active_streams[session_id]['start_time']
@@ -285,7 +296,6 @@ class PlexInfluxdbCollector:
 
                 host_libs.append(host_lib)
 
-            # TODO - Redo how we name servers so we don't have to access private var
             lib_data[server._baseurl] = host_libs
 
         self._process_library_data(lib_data)
@@ -302,9 +312,9 @@ class PlexInfluxdbCollector:
                 fields = {
                     'items': lib['items'],
                 }
-                for c in ['episodes', 'seasons']:
-                    if c in lib:
-                        fields[c] = lib[c]
+                for key in ['episodes', 'seasons']:
+                    if key in lib:
+                        fields[key] = lib[key]
                 lib_points = [
                     {
                         'measurement': 'libraries',
@@ -346,8 +356,3 @@ class PlexInfluxdbCollector:
             time.sleep(self.delay)
             if self.single_run:
                 return
-
-
-
-
-

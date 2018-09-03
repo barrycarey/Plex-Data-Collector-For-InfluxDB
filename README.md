@@ -9,6 +9,8 @@ This is a tool for collecting some basic info about your Plex server and sending
 
 Enter your desired information in config.ini and run plexcollector.py
 
+**Please Note**: If you have authentication enable in InfluxDB the provided user must be able to run the show users command and create databases
+
 ## Configuration within config.ini
 
 #### GENERAL
@@ -39,7 +41,13 @@ Enter your desired information in config.ini and run plexcollector.py
 
 ***Requirements***
 
-Python 3+
+* Python 3.x
+* InfluxDB server
 
-You will need the influxdb library installed to use this - [Found Here](https://github.com/influxdata/influxdb-python)
+Run `pip install -r requirements.txt`
+
+Python Packages
+* [influxdb](https://github.com/influxdata/influxdb-python)
+* [plexapi](https://pypi.org/project/PlexAPI/)
+
 
