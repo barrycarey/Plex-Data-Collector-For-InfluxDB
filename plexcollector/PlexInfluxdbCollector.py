@@ -12,6 +12,7 @@ from requests import ConnectTimeout
 
 from plexcollector.config import config, log
 
+
 class PlexInfluxdbCollector:
 
     def __init__(self, single_run=False):
@@ -207,12 +208,6 @@ class PlexInfluxdbCollector:
                     resolution = stream.media[0].videoResolution
                 else:
                     resolution = str(stream.media[0].bitrate) + 'Kbps'
-
-                log.debug('Title: {}'.format(full_title))
-                log.debug('Media Type: {}'.format(media_type))
-                log.debug('Session ID: {}'.format(session_id))
-                log.debug('Resolution: {}'.format(resolution))
-                log.debug('Duration: {}'.format(str(time.time() - start_time)))
 
                 playing_points = [
                     {

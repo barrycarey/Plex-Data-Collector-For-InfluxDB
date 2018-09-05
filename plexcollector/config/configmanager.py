@@ -1,8 +1,8 @@
 import configparser
 import os
 import sys
-from urllib.error import URLError
-from urllib.request import urlopen
+
+import requests
 
 
 class ConfigManager:
@@ -61,11 +61,12 @@ class ConfigManager:
         for server in self.plex_server_addresses:
             server_url = 'http://{}:32400'.format(server)
             try:
-                urlopen(server_url)
-            except URLError as e:
-                # If it's 401 it's a valid server but we're not authorized yet
-                if hasattr(e, 'code') and e.code == 401:
+                r = requests.get(server_url, verify=False)
+                if r.status_code == 401:
                     continue
+                print('Unexpected status code {} from Plex server'.format(str(r.status_code)))
+            except ConnectionError as e:
+                print('Failed to connect to Plex server ' + server)
                 failed_servers.append(server)
 
         # Do we have any valid servers left?
