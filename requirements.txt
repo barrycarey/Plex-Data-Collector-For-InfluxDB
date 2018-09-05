@@ -1,2 +1,3 @@
 influxdb
-request
+plexapi
+requests
