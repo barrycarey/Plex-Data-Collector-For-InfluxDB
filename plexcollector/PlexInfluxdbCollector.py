@@ -12,7 +12,6 @@ from requests import ConnectTimeout
 
 from plexcollector.config import config, log
 
-
 class PlexInfluxdbCollector:
 
     def __init__(self, single_run=False):
@@ -75,7 +74,7 @@ class PlexInfluxdbCollector:
         Make a reqest to plex.tv to get an authentication token for future requests
         :param username: Plex Username
         :param password: Plex Password
-        :return:
+        :return: str
         """
 
         log.info('Getting Auth Token For User {}'.format(username))
@@ -102,7 +101,7 @@ class PlexInfluxdbCollector:
 
         # Make sure we actually got a token back
         if 'authToken' in output['user']:
-            log.debug('Successfully Retrieved Auth Token Of: {}'.format(self.token))
+            log.debug('Successfully Retrieved Auth Token')
             return output['user']['authToken']
         else:
             print('Something Broke \n We got a valid response but for some reason there\'s no auth token')
@@ -114,7 +113,7 @@ class PlexInfluxdbCollector:
         """
         Sets the default headers need for a request
         :param req:
-        :return:
+        :return: request
         """
 
         log.debug('Adding Request Headers')
@@ -300,6 +299,41 @@ class PlexInfluxdbCollector:
 
         self._process_library_data(lib_data)
 
+    def get_recently_added(self):
+        """
+        Build list of recently added
+        :return:
+        """
+
+        results = []
+
+        for server in self.plex_servers:
+            recent_list = []
+            recent_list += server.library.section('Music').search(sort='addedAt:desc', libtype='track', maxresults=10)
+            recent_list += server.library.section('TV Shows').search(sort='addedAt:desc', libtype='episode', maxresults=10)
+            recent_list += server.library.section('Movies').search(sort='addedAt:desc', maxresults=10)
+
+            for item in recent_list:
+                data = {
+                    'measurement': 'recently_added',
+                    'fields': {
+                        'media_type': item.type.title(),
+                        'added_at': item.addedAt.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                    },
+                    'tags': {
+                        'host': server._baseurl
+                    }
+                }
+
+                if hasattr(item, 'grandparentTitle'):
+                    data['fields']['title'] = item.grandparentTitle + ' - ' + item.title
+                else:
+                    data['fields']['title'] = item.title
+
+
+                self.write_influx_data([data])
+
+
     def _process_library_data(self, lib_data):
         """
         Breakdown the provided library data and format for InfluxDB
@@ -351,6 +385,7 @@ class PlexInfluxdbCollector:
 
         log.info('Starting Monitoring Loop')
         while True:
+            self.get_recently_added()
             self.get_library_data()
             self.get_active_streams()
             time.sleep(self.delay)
