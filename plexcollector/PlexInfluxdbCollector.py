@@ -383,6 +383,6 @@ class PlexInfluxdbCollector:
             self.get_recently_added()
             self.get_library_data()
             self.get_active_streams()
-            time.sleep(self.delay)
             if self.single_run:
                 return
+            time.sleep(self.delay)
