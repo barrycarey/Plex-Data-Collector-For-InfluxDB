@@ -34,7 +34,8 @@ class PlexInfluxdbCollector:
         :return:
         """
         for server in self.server_addresses:
-            base_url = 'http://{}:32400'.format(server)
+            conn_security = 'https' if config.plex_https else 'http'
+            base_url = '{}://{}:32400'.format(conn_security, server)
             api_conn = PlexServer(base_url, self.get_auth_token(config.plex_user, config.plex_password))
             self.plex_servers.append(api_conn)
 
