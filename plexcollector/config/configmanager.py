@@ -41,7 +41,8 @@ class ConfigManager:
         # Plex
         self.plex_user = self.config['PLEX']['Username']
         self.plex_password = self.config['PLEX'].get('Password', raw=True)
-        self.plex_https = self.config['PLEX'].getboolean('HTTPS', fallback=False)
+        plex_https = self.config['PLEX'].getboolean('HTTPS', fallback=False)
+        self.conn_security = 'https' if plex_https else 'http'
         servers = len(self.config['PLEX']['Servers'])
 
         #Logging
@@ -60,7 +61,7 @@ class ConfigManager:
         """
         failed_servers = []
         for server in self.plex_server_addresses:
-            server_url = '{}://{}:32400'.format('https' if self.plex_https else 'http', server)
+            server_url = '{}://{}:32400'.format(self.conn_security, server)
             try:
                 r = requests.get(server_url, verify=False)
                 if r.status_code == 401:
