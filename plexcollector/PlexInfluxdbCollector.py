@@ -11,9 +11,10 @@ from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from plexapi.server import PlexServer
 from requests import ConnectTimeout
 
-from plexcollector.config import config, log
+from plexcollector.common import log
+from plexcollector.config import config
 
-
+# TODO - Update readme for PMS SSL
 class PlexInfluxdbCollector:
 
     def __init__(self, single_run=False):
