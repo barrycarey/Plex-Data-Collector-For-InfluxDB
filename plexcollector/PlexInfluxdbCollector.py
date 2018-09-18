@@ -313,9 +313,9 @@ class PlexInfluxdbCollector:
 
         for server in self.plex_servers:
             recent_list = []
-            recent_list += server.library.section('Music').search(sort='addedAt:desc', libtype='track', maxresults=10)
-            recent_list += server.library.section('TV Shows').search(sort='addedAt:desc', libtype='episode', maxresults=10)
-            recent_list += server.library.section('Movies').search(sort='addedAt:desc', maxresults=10)
+
+            for section in server.library.sections():
+                recent_list += section.recentlyAdded(maxresults=10)
 
             for item in recent_list:
                 data = {
