@@ -5,14 +5,16 @@ import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import requests
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 from plexapi.server import PlexServer
 from requests import ConnectTimeout
 
-from plexcollector.config import config, log
+from plexcollector.common import log
+from plexcollector.config import config
 
-
+# TODO - Update readme for PMS SSL
 class PlexInfluxdbCollector:
 
     def __init__(self, single_run=False):
@@ -26,6 +28,11 @@ class PlexInfluxdbCollector:
         self.delay = config.delay
         self.influx_client = self._get_influx_connection()
 
+        # Prevents console spam if verify ssl is disabled
+        if not config.plex_verify_ssl:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
         self._build_server_list()
 
     def _build_server_list(self):
@@ -34,8 +41,10 @@ class PlexInfluxdbCollector:
         :return:
         """
         for server in self.server_addresses:
-            base_url = 'http://{}:32400'.format(server)
-            api_conn = PlexServer(base_url, self.get_auth_token(config.plex_user, config.plex_password))
+            base_url = '{}://{}:32400'.format(config.conn_security, server)
+            session = requests.Session()
+            session.verify = config.plex_verify_ssl
+            api_conn = PlexServer(base_url, self.get_auth_token(config.plex_user, config.plex_password), session=session)
             self.plex_servers.append(api_conn)
 
     def _get_influx_connection(self):

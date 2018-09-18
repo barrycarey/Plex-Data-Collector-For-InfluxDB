@@ -9,7 +9,7 @@ This is a tool for collecting some basic info about your Plex server and sending
 
 Enter your desired information in config.ini and run plexcollector.py
 
-**Please Note**: If you have authentication enable in InfluxDB the provided user must be able to run the show users command and create databases
+**Please Note**: If you have authentication enable in InfluxDB the provided user must be an admin
 
 ## Configuration within config.ini
 
@@ -18,7 +18,6 @@ Enter your desired information in config.ini and run plexcollector.py
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
 |Delay          |Delay between updating metrics                                                                                      |
 |ReportCombined |When using multiple servers report total streams over all servers                                                   |
-|Output         |Write console output while tool is running                                                                          |
 #### INFLUXDB
 |Key            |Description                                                                                                         |
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
@@ -27,12 +26,15 @@ Enter your desired information in config.ini and run plexcollector.py
 |Database       |Database to write collected stats to                                                                                |
 |Username       |User that has access to the database                                                                                |
 |Password       |Password for above user                                                                                             |
+|Verify_SSL     |Disable SSL verification for InfluxDB Connection                                                                                             |
 #### PLEX
 |Key            |Description                                                                                                         |
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
 |Username       |Plex username                                                                                                       |
 |Password       |Plex Password                                                                                                       |
 |Servers        |A comma separated list of servers you wish to pull data from.                                                       |
+|HTTPS          |Connect to server using HTTPS                                                                                       |
+|Verify_SSL        |Disable SSL verification (Use this if you have a self sign SSL)                                                     |
 #### LOGGING
 |Key            |Description                                                                                                         |
 |:--------------|:-------------------------------------------------------------------------------------------------------------------|
@@ -49,5 +51,6 @@ Run `pip install -r requirements.txt`
 Python Packages
 * [influxdb](https://github.com/influxdata/influxdb-python)
 * [plexapi](https://pypi.org/project/PlexAPI/)
+* [requests](https://pypi.org/project/requests/)
 
 
