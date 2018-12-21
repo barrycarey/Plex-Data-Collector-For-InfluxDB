@@ -1,4 +1,4 @@
-FROM python:3.3-slim
+FROM python
 MAINTAINER Andrew Chumchal <andrew@andrewchumchal.com>
 
 VOLUME /src/
