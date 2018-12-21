@@ -8,4 +8,4 @@ WORKDIR /src
 
 RUN pip install -r requirements.txt
 
-CMD ["python", "-u", "/src/plexcollector.py"]
+CMD ["python3", "-u", "/src/plexcollector.py"]
