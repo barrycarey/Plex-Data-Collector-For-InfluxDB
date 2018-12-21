@@ -3,7 +3,7 @@ MAINTAINER Andrew Chumchal <andrew@andrewchumchal.com>
 
 VOLUME /src/
 COPY plexcollector.py requirements.txt /src/
-COPY config.ini /src/config.ini.example
+COPY config.ini /src/config.example.ini
 ADD plexcollector /src/plexcollector
 WORKDIR /src
 
